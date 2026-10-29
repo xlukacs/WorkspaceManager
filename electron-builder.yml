@@ -1,0 +1,45 @@
+appId: com.xlukacs.workspacemanager
+productName: Workspace Manager
+directories:
+  buildResources: build
+  output: release/${version}
+npmRebuild: false
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - node_modules/node-pty/**/*
+win:
+  extraResources:
+    - from: build/wsm.cmd
+      to: wsm.cmd
+    - from: build/configure-path.ps1
+      to: configure-path.ps1
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  executableName: WorkspaceManager
+linux:
+  target:
+    - target: deb
+      arch:
+        - x64
+  category: Development
+  executableName: WorkspaceManager
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  maintainer: Bence Márk Lukács <43961338+xlukacs@users.noreply.github.com>
+  icon: build/icon.png
+deb:
+  packageCategory: devel
+nsis:
+  include: build/installer.nsh
+  artifactName: ${productName}-${version}-setup-${arch}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+portable:
+  artifactName: ${productName}-${version}-portable-${arch}.${ext}

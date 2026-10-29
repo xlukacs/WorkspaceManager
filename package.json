@@ -1,0 +1,78 @@
+{
+  "name": "workspace-manager",
+  "version": "0.1.0",
+  "description": "Windows-first Electron app for managing local development workspaces.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "bin": {
+    "workspace-manager": "./out/cli/index.js",
+    "wsm": "./out/cli/index.js"
+  },
+  "productName": "Workspace Manager",
+  "homepage": "https://github.com/xlukacs/WorkspaceManager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xlukacs/WorkspaceManager.git"
+  },
+  "packageManager": "pnpm@10.27.0",
+  "author": "Bence Márk Lukács",
+  "license": "MIT",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "web": "vite --config vite.web.config.ts",
+    "build": "electron-vite build && vite build --config vite.cli.config.ts",
+    "cli:build": "vite build --config vite.cli.config.ts",
+    "build:cli-deb": "pnpm cli:build && node scripts/build-cli-deb.mjs",
+    "wsm": "vite build --config vite.cli.config.ts && node out/cli/index.js",
+    "mcp": "vite build --config vite.cli.config.ts && node out/cli/index.js mcp",
+    "mcp:http": "vite build --config vite.cli.config.ts && node out/cli/index.js mcp --http",
+    "mcp:docker": "pnpm cli:build && docker compose up --build -d",
+    "check:win-icon": "node ./scripts/assert-windows-icon.mjs",
+    "build:win": "pnpm run check:win-icon && pnpm run build && electron-builder --config electron-builder.yml --win",
+    "build:linux": "pnpm run build && electron-builder --config electron-builder.yml --linux deb && node scripts/build-cli-deb.mjs",
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@fontsource/space-grotesk": "^5.1.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron-store": "^10.1.0",
+    "fast-glob": "^3.3.3",
+    "lucide-react": "^1.16.0",
+    "node-pty": "^1.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "yaml": "^2.8.1",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.13.10",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.4.1",
+    "electron": "^35.0.3",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.4.1",
+    "vitest": "^3.1.1"
+  }
+}

@@ -1,0 +1,36 @@
+services:
+  mcp:
+    image: workspace-manager-mcp:${VERSION:-0.1.0}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      # Loopback only: run_command executes project scripts, so do not expose
+      # this to the network unless MCP_TOKEN is set.
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-3847}:3847"
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3847"
+      MCP_TOKEN: ${MCP_TOKEN:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      WORKSPACE_MANAGER_STORE: /data/workspace-manager.json
+    volumes:
+      # Mount the directory, not the file: the app saves by writing a temp file
+      # and renaming it, which a single-file bind mount would never see.
+      - ${WORKSPACE_MANAGER_CONFIG_DIR:?Set WORKSPACE_MANAGER_CONFIG_DIR in .env}:/data:ro
+      - ${WORKSPACES_HOST_PATH:?Set WORKSPACES_HOST_PATH in .env}:${WORKSPACES_HOST_PATH:?}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3847/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

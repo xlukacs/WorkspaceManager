@@ -1,0 +1,135 @@
+{
+  "version": 11,
+  "collections": [
+    {
+      "id": "active",
+      "name": "Active",
+      "order": 0
+    },
+    {
+      "id": "backend",
+      "name": "Backend",
+      "order": 1
+    }
+  ],
+  "projects": [
+    {
+      "id": "p1",
+      "name": "demo",
+      "nameOverride": null,
+      "order": 0,
+      "rootPath": "/repos/demo",
+      "collectionIds": [
+        "active",
+        "backend"
+      ],
+      "packageManager": "pnpm",
+      "isMonorepo": true,
+      "rootScripts": {
+        "dev": "vite",
+        "build": "tsc"
+      },
+      "workspacePackages": [
+        {
+          "id": "pkg-web",
+          "name": "@demo/web",
+          "relativePath": "apps/web",
+          "absPath": "/repos/demo/apps/web",
+          "scripts": {
+            "dev": "vite",
+            "test": "vitest"
+          }
+        }
+      ],
+      "docker": {
+        "composeFile": "/repos/demo/compose.yaml",
+        "dockerfile": null,
+        "services": [
+          "api"
+        ]
+      },
+      "pythonEnvironment": {
+        "id": "venv",
+        "name": ".venv",
+        "kind": "venv",
+        "rootPath": "/repos/demo/.venv",
+        "scriptsPath": "/repos/demo/.venv/bin",
+        "pythonPath": "/repos/demo/.venv/bin/python"
+      },
+      "commandChains": {
+        "p1::root::build": [
+          "p1::pkg-web::test"
+        ]
+      },
+      "favoriteCommandIds": [
+        "p1::root::build",
+        "p1::pkg-web::dev"
+      ],
+      "runActions": [
+        {
+          "id": "boot",
+          "command": "pnpm dev",
+          "description": "Boot stack"
+        }
+      ],
+      "defaultRunActionId": "boot",
+      "pinnedEndpoints": [
+        {
+          "url": "http://localhost:3000",
+          "label": "App"
+        }
+      ],
+      "pinnedPorts": [
+        3000
+      ],
+      "lastScanAt": 123,
+      "quickLinks": [
+        {
+          "id": "docs",
+          "label": "Docs",
+          "url": "https://example.com/docs"
+        }
+      ],
+      "gitSummary": null,
+      "gitWorktrees": [],
+      "gitWorktreesRoot": null
+    }
+  ],
+  "terminals": [
+    {
+      "id": "console-1",
+      "projectId": "p1",
+      "commandId": "p1::root::dev",
+      "title": "Dev",
+      "pinned": true,
+      "workspacePaused": true,
+      "worktreePath": null,
+      "cwd": "/repos/demo",
+      "shellLine": "pnpm run dev",
+      "pythonEnvironment": {
+        "id": "venv",
+        "name": ".venv",
+        "kind": "venv",
+        "rootPath": "/repos/demo/.venv",
+        "scriptsPath": "/repos/demo/.venv/bin",
+        "pythonPath": "/repos/demo/.venv/bin/python"
+      },
+      "status": "stopped",
+      "createdAt": 1,
+      "updatedAt": 2,
+      "exitCode": null,
+      "buffer": "ready\r\n",
+      "restorable": true
+    }
+  ],
+  "settings": {
+    "preferredShell": "bash",
+    "windowBounds": {
+      "x": 10,
+      "y": 20,
+      "width": 1560,
+      "height": 980,
+      "isMaximized": false
+    }
+  }
+}

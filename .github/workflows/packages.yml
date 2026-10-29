@@ -1,0 +1,82 @@
+name: Verify packages
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  linux:
+    name: Linux desktop and CLI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm exec vite build --config vite.web.config.ts
+      - name: Build desktop and CLI from the same revision
+        run: |
+          pnpm build
+          pnpm exec electron-builder --config electron-builder.yml --linux deb --publish never
+          node scripts/build-cli-deb.mjs
+      - name: Install and exercise packaged desktop and CLI
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nodejs xvfb ./release/*/*.deb
+          wsm --help
+          workspace-manager --help
+          desktop=$(dpkg -L workspace-manager | awk '/\/WorkspaceManager$/ { print; exit }')
+          test -n "$desktop"
+          xvfb-run -a node scripts/smoke-packaged-app.mjs "$desktop" /usr/bin/wsm
+          sudo apt-get remove -y workspace-manager workspace-manager-cli
+          test ! -e /usr/bin/wsm
+          test ! -e /usr/bin/workspace-manager
+      - name: Retain matching Linux packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-packages-${{ github.sha }}
+          path: release/*/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer and PTY
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build:win --publish never
+      - name: Verify install, PATH, wrappers, live PTY and uninstall
+        shell: pwsh
+        run: ./scripts/smoke-windows-installer.ps1
+      - name: Retain matching Windows packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-packages-${{ github.sha }}
+          path: release/*/*.exe
+          if-no-files-found: error

@@ -1,0 +1,12 @@
+node_modules
+.git
+.cursor
+release
+out/main
+out/preload
+out/renderer
+out/web
+src/renderer
+coverage
+*.md
+!README.md
