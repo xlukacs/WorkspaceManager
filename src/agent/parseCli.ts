@@ -75,7 +75,7 @@ export function flagBoolean(flags: Record<string, string | boolean>, key: string
   return flags[key] === true
 }
 
-export const CLI_HELP = `Workspace Manager CLI — inspect workspaces and run their commands.
+export const CLI_HELP = `Workspace Manager CLI - inspect workspaces and run their commands.
 
 Usage:
   workspace-manager list [--collection <name>] [--json]
@@ -116,7 +116,7 @@ a docker title (e.g. "Compose Up"), or a Run action description.
 
 Options:
   --lease <id>               Ownership token (or set WORKSPACE_MANAGER_LEASE)
-  --lease-ms <ms>            Required when acquiring/renewing; 1–600000 ms (maximum 10 minutes)
+  --lease-ms <ms>            Required when acquiring/renewing; 1-600000 ms (maximum 10 minutes)
   --wait                     Queue acquire/start/run until exclusive ownership starts; progress goes to stderr
   --store <path>             Store JSON (or set WORKSPACE_MANAGER_STORE)
   --collection <name>        Filter list by group (legacy flag name)
@@ -135,7 +135,7 @@ Options:
 Environment leases:
   One active lease per workspace group; its workspaces and worktrees share a FIFO queue.
   Ungrouped workspaces each have their own queue.
-  Supply --lease-ms explicitly: 1–600000 ms (maximum 10 minutes), with no default.
+  Supply --lease-ms explicitly: 1-600000 ms (maximum 10 minutes), with no default.
   The countdown starts when ownership is granted; time spent queued does not count.
   Pass --lease <id> on controls, or set WORKSPACE_MANAGER_LEASE.
   Release early when finished. Otherwise expiry automatically aborts headless runs,
