@@ -4,6 +4,10 @@ directories:
   buildResources: build
   output: release/${version}
 npmRebuild: false
+# Avoid the legacy winCodeSign.7z, which extracts macOS dylibs as NTFS symlinks
+# and fails on company Windows accounts without SeCreateSymbolicLinkPrivilege.
+toolsets:
+  winCodeSign: "1.1.0"
 files:
   - out/**/*
   - package.json
