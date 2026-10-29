@@ -5,9 +5,10 @@ import { decodeWorkspaceState, legacyStateView } from '@shared/workspaceModel'
 import type { LegacyState, StoredState } from '@shared/types'
 import { workspaceFromDisk, terminalFromDisk, type PersistedState } from '@shared/persistedState'
 import { normalizeLegacyWorkspaceRecord, sortWorkspaces } from '@shared/types'
+import { APP_PROFILE_DIR, APP_STORE_FILE, LEGACY_APP_PROFILE_DIRS } from '@shared/appUserData'
 
 export const STORE_ENV_VAR = 'WORKSPACE_MANAGER_STORE'
-const STORE_FILE_NAME = 'workspace-manager.json'
+const STORE_FILE_NAME = APP_STORE_FILE
 
 export class StoreNotFoundError extends Error {
   constructor(public readonly searchedPaths: string[]) {
@@ -45,7 +46,7 @@ export function candidateStorePaths(options?: { storePath?: string | null; env?:
     home ? join(home, '.config') : null,
     home ? join(home, 'Library', 'Application Support') : null
   ])
-  const appNames = ['workspace-manager', 'Workspace Manager', 'WorkspaceManager']
+  const appNames = [APP_PROFILE_DIR, ...LEGACY_APP_PROFILE_DIRS]
 
   return uniquePaths([
     options?.storePath,
