@@ -136,15 +136,15 @@ export function createAppCliHandler(deps: {
     }
     if (['stop', 'pause', 'resume', 'kill-all'].includes(request.action)) {
       let result: unknown
-      if (request.action === 'kill-all') result = await terminals.stopAll({ force: true })
+      if (request.action === 'kill-all') result = await terminals.stopAll()
       else if (request.action === 'stop' && text(request.sessionId)) {
         if (text(request.workspace) || text(request.group)) throw new Error('Choose a session or a workspace/group.')
-        result = await terminals.stop(request.sessionId!, { force: true })
+        result = await terminals.stop(request.sessionId!)
         if (!result) throw new Error('Unknown session.')
       } else {
         const ids = selectedWorkspaceIds(request)
-        result = request.action === 'pause' ? await terminals.pauseGroup(ids, { force: true })
-          : request.action === 'resume' ? await terminals.resumeGroup(ids) : await terminals.stopGroup(ids, { force: true })
+        result = request.action === 'pause' ? await terminals.pauseGroup(ids)
+          : request.action === 'resume' ? await terminals.resumeGroup(ids) : await terminals.stopGroup(ids)
       }
       deps.changed()
       // Output buffers are available separately, keeping list/control responses bounded.
@@ -158,7 +158,7 @@ export function createAppCliHandler(deps: {
   const scopeOf = (workspace: { id: string; groupId: string | null }) => workspace.groupId ? `group:${workspace.groupId}` : `workspace:${workspace.id}`
   const leases = new WorkspaceLeases(async (ids, scope) => {
     const currentIds = store.getWorkspaceRecords().filter((workspace) => scopeOf(workspace) === scope).map((workspace) => workspace.id)
-    await terminals.stopGroup([...new Set([...ids, ...currentIds])], { force: true })
+    await terminals.stopGroup([...new Set([...ids, ...currentIds])])
     deps.changed()
   })
   const cwdWorkspace = (path: string) => {

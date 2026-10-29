@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { killChildProcess, killProcessTree, killPtyProcess } from '@main/services/processTree'
 
 describe('processTree', () => {
+  it('closes the PTY even when no pid is available', () => {
+    const kill = vi.fn()
+    killPtyProcess({ kill })
+    expect(kill).toHaveBeenCalledOnce()
+  })
+
   it('kills a pty process tree when pid is available', () => {
     const kill = vi.fn()
     killPtyProcess({ pid: 4242, kill })
