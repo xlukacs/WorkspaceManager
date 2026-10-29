@@ -4,6 +4,10 @@ directories:
   buildResources: build
   output: release/${version}
 npmRebuild: false
+# Zip-based Windows codesign/rcedit tools. Pair with patches/app-builder-lib@26.8.1.patch
+# so Windows rcedit does not unpack winCodeSign-2.6.0.7z (Darwin dylibs as NTFS symlinks).
+toolsets:
+  winCodeSign: "1.1.0"
 files:
   - out/**/*
   - package.json
@@ -13,6 +17,8 @@ win:
   extraResources:
     - from: build/wsm.cmd
       to: wsm.cmd
+    - from: build/wsm.ps1
+      to: wsm.ps1
     - from: build/configure-path.ps1
       to: configure-path.ps1
   target:

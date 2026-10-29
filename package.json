@@ -22,7 +22,10 @@
       "electron",
       "esbuild",
       "node-pty"
-    ]
+    ],
+    "patchedDependencies": {
+      "app-builder-lib@26.8.1": "patches/app-builder-lib@26.8.1.patch"
+    }
   },
   "scripts": {
     "dev": "electron-vite dev",

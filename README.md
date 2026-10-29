@@ -117,7 +117,7 @@ See [the integration plan](docs/integration-plan.md) for acceptance status.
 
 `pnpm build:win` uses `build/icon.ico`, generated from `src/assets/logo.png`. Linux packaging uses `build/icon.png`.
 
-The Windows package path is built on top of the existing Electron bundle and packages the existing installed dependencies without forcing an extra native rebuild step.
+The Windows package path is built on top of the existing Electron bundle and packages the existing installed dependencies without forcing an extra native rebuild step. Packaging uses electron-builder’s `win-codesign` 1.1.0 zip toolset and a pnpm patch so Windows rcedit runs `rcedit.exe` directly. Without that patch, electron-builder’s native `app-builder rcedit` always unpacks `winCodeSign-2.6.0.7z`, which stores macOS dylibs as NTFS symbolic links and fails on locked-down company accounts. Run `pnpm install` after pulling so the patch applies. If an older `build:win` already failed while unpacking `winCodeSign`, you can delete `%LOCALAPPDATA%/electron-builder/Cache/winCodeSign`; it is not required once rcedit no longer uses that archive.
 
 `node-pty` is already installed as part of `pnpm install`, and this project now tells `electron-builder` to skip the additional rebuild pass that can fail on Windows machines missing the Spectre-mitigated MSVC libraries.
 
@@ -151,8 +151,10 @@ another catalog just because its file is in the same directory. Update the CLI
 and restart the desktop app together when upgrading to this store-bound protocol;
 old endpoint files without a store identity are rejected.
 
-Windows setup installs `wsm.cmd` and `workspace-manager.cmd` on the user PATH,
-using the bundled Electron runtime. On Linux, install both the desktop `.deb`
+Windows setup installs `wsm.ps1` (PowerShell) and `wsm.cmd` (Command Prompt) on
+the user PATH, using the bundled Electron runtime. PowerShell must use the
+`.ps1` wrapper; `wsm.cmd` in GitHub Copilot or VS Code ConPTY fails with
+Access Denied 0x5. On Linux, install both the desktop `.deb`
 and the existing CLI `.deb` to use `wsm start` with the desktop app.
 
 ### Exclusive environment queues

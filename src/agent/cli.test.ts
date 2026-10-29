@@ -156,6 +156,9 @@ describe('CLI help', () => {
     })
     expect(code).toBe(0)
     expect(out).toContain('workspace-manager mcp --http')
+    expect(out).toContain('CLI - inspect')
+    expect(out).toContain('1-600000')
+    expect(out, 'Windows consoles mojibake UTF-8 dashes').toMatch(/^[\t\n\r\x20-\x7e]*$/)
   })
 
   it('documents environment leases and the FIFO queue', async () => {
