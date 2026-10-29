@@ -1,6 +1,8 @@
 import { manageAppWindow } from '@main/services/appWindow'
 import { startAppCliServer } from '@main/services/appCliServer'
+import { migrateLegacyAppUserData } from '@shared/appUserData'
 import { app, BrowserWindow, Menu, screen, shell } from 'electron'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { AppStore } from '@main/store'
@@ -9,6 +11,7 @@ import { createDebounced } from '@shared/debounce'
 import appIcon from '../../build/icon.png?asset'
 
 if (process.env.WORKSPACE_MANAGER_USER_DATA) app.setPath('userData', process.env.WORKSPACE_MANAGER_USER_DATA)
+else app.setPath('userData', migrateLegacyAppUserData(app.getPath('appData'), { existsSync, mkdirSync, copyFileSync }))
 const ownsInstance = app.requestSingleInstanceLock()
 if (!ownsInstance) app.quit()
 if (process.platform === 'linux' && is.dev) {

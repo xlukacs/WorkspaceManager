@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -119,5 +119,38 @@ describe('running app CLI protocol', () => {
     vi.stubEnv('WORKSPACE_MANAGER_STORE', join(directories[0]!, 'other.json'))
     await expect(callRunningApp({ action: 'add' })).rejects.toThrow('different store')
     expect(await callRunningApp({ action: 'ping' }, { storePath: server.endpoint.storePath })).toBe('ping')
+  })
+
+  it('skips a stale profile endpoint and uses the live app', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wsm-profiles-')); directories.push(root)
+    const staleDir = join(root, 'workspace-manager')
+    const liveDir = join(root, 'Workspace Manager')
+    mkdirSync(staleDir)
+    writeFileSync(join(staleDir, 'cli.json'), JSON.stringify({
+      port: 1, token: 'a'.repeat(64), storePath: join(staleDir, 'workspace-manager.json')
+    }))
+    const server = await startAppCliServer({
+      directory: liveDir, storePath: join(liveDir, 'workspace-manager.json'), handle: async (request) => request.action
+    })
+    servers.push(server)
+    vi.stubEnv('XDG_CONFIG_HOME', root)
+    vi.stubEnv('APPDATA', root)
+    expect(await callRunningApp({ action: 'ping' })).toBe('ping')
+  })
+
+  it('prefers the installer profile when more than one app endpoint is live', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wsm-profiles-')); directories.push(root)
+    const installed = await startAppCliServer({
+      directory: join(root, 'workspace-manager'), storePath: join(root, 'workspace-manager', 'workspace-manager.json'),
+      handle: async () => 'installed'
+    })
+    const leftover = await startAppCliServer({
+      directory: join(root, 'Workspace Manager'), storePath: join(root, 'Workspace Manager', 'workspace-manager.json'),
+      handle: async () => 'leftover'
+    })
+    servers.push(installed, leftover)
+    vi.stubEnv('XDG_CONFIG_HOME', root)
+    vi.stubEnv('APPDATA', root)
+    expect(await callRunningApp({ action: 'ping' })).toBe('installed')
   })
 })

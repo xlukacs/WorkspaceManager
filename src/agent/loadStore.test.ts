@@ -55,6 +55,8 @@ describe('agent store loading', () => {
     expect(paths[1]).toBe('/env/workspace-manager.json')
     expect(paths).toContain('/xdg/workspace-manager/workspace-manager.json')
     expect(paths).toContain('/xdg/Workspace Manager/workspace-manager.json')
+    expect(paths.indexOf('/xdg/workspace-manager/workspace-manager.json'))
+      .toBeLessThan(paths.indexOf('/xdg/Workspace Manager/workspace-manager.json'))
   })
 
   it('loads and normalizes workspaces from the store file', async () => {
