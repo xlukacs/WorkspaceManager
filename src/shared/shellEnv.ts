@@ -126,14 +126,13 @@ export function buildShellEnv(
     env.COLORTERM = env.COLORTERM ?? 'truecolor'
     env.TERM = env.TERM ?? 'xterm-256color'
     env.COMPOSE_ANSI = env.COMPOSE_ANSI ?? 'always'
+    // Compose rejects --progress=plain when ANSI is forced.
+    if (env.COMPOSE_ANSI === 'always') delete env.COMPOSE_PROGRESS
   } else {
     env.BUILDKIT_PROGRESS = env.BUILDKIT_PROGRESS ?? 'plain'
     env.COMPOSE_ANSI = env.COMPOSE_ANSI ?? 'never'
     delete env.COLORTERM
-  }
-
-  if (platform() === 'win32') {
-    env.COMPOSE_PROGRESS = env.COMPOSE_PROGRESS ?? 'plain'
+    if (platform() === 'win32') env.COMPOSE_PROGRESS = env.COMPOSE_PROGRESS ?? 'plain'
   }
 
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'

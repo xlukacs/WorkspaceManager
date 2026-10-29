@@ -60,8 +60,22 @@ describe('getCommandInvocation', () => {
 })
 
 describe('buildShellEnv', () => {
-  it('uses plain compose progress on Windows so docker does not paint the console buffer', () => {
-    const env = buildShellEnv(null, { interactive: true })
+  it('does not force plain compose progress when ANSI is always', () => {
+    const previous = process.env.COMPOSE_PROGRESS
+    process.env.COMPOSE_PROGRESS = 'plain'
+    try {
+      const env = buildShellEnv(null, { interactive: true })
+      expect(env.COMPOSE_ANSI).toBe('always')
+      expect(env.COMPOSE_PROGRESS).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.COMPOSE_PROGRESS
+      else process.env.COMPOSE_PROGRESS = previous
+    }
+  })
+
+  it('uses plain compose progress for non-interactive Windows runs', () => {
+    const env = buildShellEnv(null, { interactive: false })
+    expect(env.COMPOSE_ANSI).toBe('never')
     if (process.platform === 'win32') expect(env.COMPOSE_PROGRESS).toBe('plain')
     else expect(env.COMPOSE_PROGRESS).toBeUndefined()
   })
