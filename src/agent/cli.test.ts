@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseCliArgs } from '@agent/parseCli'
+import { parseCliArgs, rewriteLeaseAlias } from '@agent/parseCli'
 import { catalogFromState } from '@agent/catalog'
 import { handleMcpRequest, PROTOCOL_VERSION } from '@agent/mcp'
 import { runCli } from '@agent/cli'
@@ -64,6 +64,17 @@ describe('CLI parsing', () => {
     expect(parsed.flags.port).toBe('3847')
     expect(parsed.flags.token).toBe('s3cret')
   })
+
+  it('maps lease and queue help aliases onto the documented lease commands', () => {
+    expect(rewriteLeaseAlias(parseCliArgs(['lease', 'help'])).command).toBe('help')
+    expect(rewriteLeaseAlias(parseCliArgs(['queue'])).command).toBe('help')
+    expect(rewriteLeaseAlias(parseCliArgs(['lease', 'acquire', 'api', '--lease-ms', '1000']))).toMatchObject({
+      command: 'acquire',
+      positionals: ['api'],
+      flags: { 'lease-ms': '1000' }
+    })
+    expect(rewriteLeaseAlias(parseCliArgs(['lease', 'status', 'lease-1'])).command).toBe('lease-status')
+  })
 })
 
 describe('MCP protocol', () => {
@@ -78,7 +89,7 @@ describe('MCP protocol', () => {
       result: { protocolVersion: '2024-11-05', serverInfo: { name: 'workspace-manager' } }
     })
 
-    const listed = await handleMcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { catalogLoader: () => catalog })
+    const listed = await handleMcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { catalogLoader: () => catalog, storePath: '/nonexistent/wsm-test-store.json' })
     expect((listed as { result: { tools: Array<{ name: string }> } }).result.tools.map((tool) => tool.name)).toEqual([
       'list_workspaces',
       'get_workspace',
@@ -145,6 +156,23 @@ describe('CLI help', () => {
     })
     expect(code).toBe(0)
     expect(out).toContain('workspace-manager mcp --http')
+  })
+
+  it('documents environment leases and the FIFO queue', async () => {
+    const help = async (args: string[]) => {
+      let output = ''
+      const code = await runCli(args, { stdout: (text) => { output += text }, stderr: () => undefined })
+      return { code, output }
+    }
+    for (const args of [['help'], ['lease'], ['lease', 'help'], ['queue']]) {
+      const result = await help(args)
+      expect(result.code, args.join(' ')).toBe(0)
+      expect(result.output).toContain('Environment leases')
+      expect(result.output).toContain('FIFO queue')
+      expect(result.output).toContain('workspace-manager acquire')
+      expect(result.output).toContain('lease-status')
+      expect(result.output).toContain('--wait')
+    }
   })
 
   it('treats a bare workspace name as incomplete run usage', async () => {

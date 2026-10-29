@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { constants, platform } from 'node:os'
 import type { CommandExecutionPlan, CommandRunPlan, ShellPreference } from '@shared/types'
 import { buildShellEnv, getCommandInvocation, toChildProcessArgs } from '@shared/shellEnv'
+import { killProcessTree } from '@main/services/processTree'
 import { isLongRunningRunPlan } from '@shared/terminalExecution'
 
 export const DEFAULT_RUN_TIMEOUT_MS = 120_000
@@ -34,6 +35,7 @@ export interface ExecuteRunPlanOptions {
   timeoutMs?: number
   dryRun?: boolean
   onChunk?: (chunk: string) => void
+  signal?: AbortSignal
 }
 
 function trimOutput(output: string) {
@@ -49,31 +51,8 @@ function exitCodeOf(code: number | null, signal: NodeJS.Signals | null) {
 }
 
 function killProcess(pid: number | undefined) {
-  if (!pid) return
-  try {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      return
-    }
-    try {
-      process.kill(-pid, 'SIGTERM')
-    } catch {
-      process.kill(pid, 'SIGTERM')
-    }
-    setTimeout(() => {
-      try {
-        process.kill(-pid, 'SIGKILL')
-      } catch {
-        try {
-          process.kill(pid, 'SIGKILL')
-        } catch {
-          // Process may already have exited.
-        }
-      }
-    }, 150)
-  } catch {
-    // Process may already have exited.
-  }
+  // Finish tree termination before allowing a queue successor to run.
+  killProcessTree(pid, { sync: true })
 }
 
 function runStep(
@@ -81,9 +60,14 @@ function runStep(
   preferredShell: ShellPreference,
   timeoutMs: number,
   onChunk?: (chunk: string) => void,
-  nodeCaCertificate?: string | null
+  nodeCaCertificate?: string | null,
+  signal?: AbortSignal
 ): Promise<RunStepResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ title: step.title, cwd: step.cwd, shellLine: step.shellLine, exitCode: 130, output: '', timedOut: false })
+      return
+    }
     const invocation = getCommandInvocation(preferredShell, step.shellLine)
     const { args, windowsVerbatimArguments } = toChildProcessArgs(invocation)
     const child = spawn(invocation.shell, args, {
@@ -98,6 +82,8 @@ function runStep(
     let output = ''
     let timedOut = false
     let settled = false
+    const abort = () => killProcess(child.pid)
+    signal?.addEventListener('abort', abort, { once: true })
     const timer = timeoutMs > 0
       ? setTimeout(() => {
         timedOut = true
@@ -126,6 +112,7 @@ function runStep(
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
       child.stdout.destroy()
       child.stderr.destroy()
       resolve({
@@ -175,7 +162,7 @@ export async function executeRunPlan(
         ? `\n[${index + 1}/${plan.steps.length}] ${step.title}\n$ ${step.shellLine}\n`
         : `$ ${step.shellLine}\n`
     )
-    const result = await runStep(step, options.preferredShell, remaining, options.onChunk, options.nodeCaCertificate)
+    const result = await runStep(step, options.preferredShell, remaining, options.onChunk, options.nodeCaCertificate, options.signal)
     steps.push(result)
     if (result.exitCode !== 0 || result.timedOut) {
       return {
