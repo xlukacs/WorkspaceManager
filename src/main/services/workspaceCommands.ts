@@ -90,7 +90,7 @@ function commandIndex(input: WorkspaceRecord, checkout = input.rootPath) {
     }
     const docker = project.docker
     if (docker?.composeFile) {
-      const base = `docker compose -f "${projectConfigPath(workspace, project, docker.composeFile)}"`
+      const base = `docker compose -f ${quoted(projectConfigPath(workspace, project, docker.composeFile))}`
       for (const [key, name, args, rank, description] of [
         ['compose-up', 'Compose Up', 'up', 100, 'Start the stack in attached mode'],
         ['compose-build', 'Compose Build', 'build', 86, 'Build compose services'],
@@ -105,7 +105,7 @@ function commandIndex(input: WorkspaceRecord, checkout = input.rootPath) {
     }
     if (docker?.dockerfile) {
       const image = basename(joinPaths(workspace.rootPath, project.relativePath)).toLowerCase().replace(/[^a-z0-9-_]+/g, '-')
-      add('docker::docker-build', 'Build Image', `docker build -t ${image}:local -f "${projectConfigPath(workspace, project, docker.dockerfile)}" .`, 'docker', 84, undefined, `Build ${image} from Dockerfile`)
+      add('docker::docker-build', 'Build Image', `docker build -t ${image}:local -f ${quoted(projectConfigPath(workspace, project, docker.dockerfile))} .`, 'docker', 84, undefined, `Build ${image} from Dockerfile`)
     }
   }
   const root = rootProject(workspace)

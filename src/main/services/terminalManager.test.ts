@@ -818,7 +818,7 @@ describe('TerminalManager', () => {
 
   it.runIf(process.platform !== 'win32')('falls back to bash when pwsh is unavailable', async () => {
     let capturedShell: string | null = null
-    let capturedArgs: string[] = []
+    let capturedArgs: string[] | string = []
     const originalPath = process.env.PATH
     // Hosted Linux runners may have pwsh in /usr/bin. Control its absence
     // without depending on the host's installed shells.

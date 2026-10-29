@@ -97,7 +97,7 @@ describe('shared workspace command index and planner', () => {
     expect(plan.steps[1]?.shellLine).toContain('-m pip install -r requirements.txt')
     expect(plan.steps[1]?.pythonEnvironment?.rootPath).toBe(join(feature, 'services/api/.venv'))
     expect(plan.steps[1]?.pythonEnvironment?.rootPath).not.toBe(join(root, 'services/api/.venv'))
-    expect(plan.steps[2]?.shellLine).toBe('docker compose -f "compose.yaml" up')
+    expect(plan.steps[2]?.shellLine).toBe('docker compose -f compose.yaml up')
     expect(plan.steps[3]?.shellLine).toBe('pnpm run dev')
   })
 

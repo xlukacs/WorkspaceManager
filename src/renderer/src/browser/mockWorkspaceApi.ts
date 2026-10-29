@@ -701,7 +701,7 @@ function attachBrowserDockerChainMetadata(
 function listBrowserDockerCommands(workspace: LegacyWorkspaceRecord): DockerCommandListResponse {
   if (!workspace.docker) return { groups: [] }
   const groups: DockerCommandListResponse['groups'] = []
-  const composeBase = workspace.docker.composeFile ? `docker compose -f "${workspace.docker.composeFile}"` : null
+  const composeBase = workspace.docker.composeFile ? `docker compose -f ${workspace.docker.composeFile}` : null
 
   if (composeBase) {
     groups.push({
@@ -732,7 +732,7 @@ function listBrowserDockerCommands(workspace: LegacyWorkspaceRecord): DockerComm
       key: 'dockerfile',
       title: 'Dockerfile',
       commands: [
-        buildDockerDescriptor(workspace, 'docker-build', 'Build Image', 'Build the root Dockerfile', `docker build -t ${workspace.name}:local -f "${workspace.docker.dockerfile}" .`, 74)
+        buildDockerDescriptor(workspace, 'docker-build', 'Build Image', 'Build the root Dockerfile', `docker build -t ${workspace.name}:local -f ${workspace.docker.dockerfile} .`, 74)
       ]
     })
   }
