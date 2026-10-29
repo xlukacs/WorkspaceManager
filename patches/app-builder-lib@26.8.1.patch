@@ -1,0 +1,22 @@
+diff --git a/out/winPackager.js b/out/winPackager.js
+index ac1706f98ea50a3429afddd58e4b192dbde2540e..cc54e931f7f180e1d639887375e925ce72013f48 100644
+--- a/out/winPackager.js
++++ b/out/winPackager.js
+@@ -180,8 +180,15 @@ class WinPackager extends platformPackager_1.PlatformPackager {
+             timer.end();
+         }
+         const timer = (0, timer_1.time)("wine&sign");
+-        // rcedit crashed of executed using wine, resourcehacker works
+-        if (process.platform === "win32" || process.platform === "darwin") {
++        // Native app-builder rcedit always unpacks winCodeSign-2.6.0.7z, which stores
++        // Darwin dylibs as NTFS symlinks and fails without SeCreateSymbolicLinkPrivilege.
++        // On Windows, run rcedit.exe from the JS toolset zip instead.
++        if (process.platform === "win32") {
++            const vendor = await (0, windows_1.getRceditBundle)((_c = this.config.toolsets) === null || _c === void 0 ? void 0 : _c.winCodeSign);
++            const rcedit = process.arch === "ia32" ? vendor.x86 : vendor.x64;
++            await (0, builder_util_1.retry)(() => (0, builder_util_1.exec)(rcedit, args), { retries: 3, interval: 1000 });
++        }
++        else if (process.platform === "darwin") {
+             await (0, builder_util_1.executeAppBuilder)(["rcedit", "--args", JSON.stringify(args)], undefined /* child-process */, {}, 3 /* retry three times */);
+         }
+         else if (this.info.framework.name === "electron") {

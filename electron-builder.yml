@@ -4,8 +4,8 @@ directories:
   buildResources: build
   output: release/${version}
 npmRebuild: false
-# Avoid the legacy winCodeSign.7z, which extracts macOS dylibs as NTFS symlinks
-# and fails on company Windows accounts without SeCreateSymbolicLinkPrivilege.
+# Zip-based Windows codesign/rcedit tools. Pair with patches/app-builder-lib@26.8.1.patch
+# so Windows rcedit does not unpack winCodeSign-2.6.0.7z (Darwin dylibs as NTFS symlinks).
 toolsets:
   winCodeSign: "1.1.0"
 files:

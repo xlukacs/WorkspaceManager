@@ -117,7 +117,7 @@ See [the integration plan](docs/integration-plan.md) for acceptance status.
 
 `pnpm build:win` uses `build/icon.ico`, generated from `src/assets/logo.png`. Linux packaging uses `build/icon.png`.
 
-The Windows package path is built on top of the existing Electron bundle and packages the existing installed dependencies without forcing an extra native rebuild step. Packaging uses electron-builder’s `win-codesign` 1.1.0 toolset so the build does not extract macOS dylibs as NTFS symbolic links (that fails on locked-down company accounts). If an older `build:win` already failed while unpacking `winCodeSign`, delete `%LOCALAPPDATA%/electron-builder/Cache/winCodeSign` and retry.
+The Windows package path is built on top of the existing Electron bundle and packages the existing installed dependencies without forcing an extra native rebuild step. Packaging uses electron-builder’s `win-codesign` 1.1.0 zip toolset and a pnpm patch so Windows rcedit runs `rcedit.exe` directly. Without that patch, electron-builder’s native `app-builder rcedit` always unpacks `winCodeSign-2.6.0.7z`, which stores macOS dylibs as NTFS symbolic links and fails on locked-down company accounts. Run `pnpm install` after pulling so the patch applies. If an older `build:win` already failed while unpacking `winCodeSign`, you can delete `%LOCALAPPDATA%/electron-builder/Cache/winCodeSign`; it is not required once rcedit no longer uses that archive.
 
 `node-pty` is already installed as part of `pnpm install`, and this project now tells `electron-builder` to skip the additional rebuild pass that can fail on Windows machines missing the Spectre-mitigated MSVC libraries.
 
