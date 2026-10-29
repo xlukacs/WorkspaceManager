@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -119,5 +119,22 @@ describe('running app CLI protocol', () => {
     vi.stubEnv('WORKSPACE_MANAGER_STORE', join(directories[0]!, 'other.json'))
     await expect(callRunningApp({ action: 'add' })).rejects.toThrow('different store')
     expect(await callRunningApp({ action: 'ping' }, { storePath: server.endpoint.storePath })).toBe('ping')
+  })
+
+  it('skips a stale profile endpoint and uses the live app', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wsm-profiles-')); directories.push(root)
+    const staleDir = join(root, 'workspace-manager')
+    const liveDir = join(root, 'Workspace Manager')
+    mkdirSync(staleDir)
+    writeFileSync(join(staleDir, 'cli.json'), JSON.stringify({
+      port: 1, token: 'a'.repeat(64), storePath: join(staleDir, 'workspace-manager.json')
+    }))
+    const server = await startAppCliServer({
+      directory: liveDir, storePath: join(liveDir, 'workspace-manager.json'), handle: async (request) => request.action
+    })
+    servers.push(server)
+    vi.stubEnv('XDG_CONFIG_HOME', root)
+    vi.stubEnv('APPDATA', root)
+    expect(await callRunningApp({ action: 'ping' })).toBe('ping')
   })
 })
