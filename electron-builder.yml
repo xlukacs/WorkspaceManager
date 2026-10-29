@@ -17,6 +17,8 @@ win:
   extraResources:
     - from: build/wsm.cmd
       to: wsm.cmd
+    - from: build/wsm.ps1
+      to: wsm.ps1
     - from: build/configure-path.ps1
       to: configure-path.ps1
   target:

@@ -2,6 +2,8 @@
   CreateDirectory "$INSTDIR\bin"
   CopyFiles /SILENT "$INSTDIR\resources\wsm.cmd" "$INSTDIR\bin\wsm.cmd"
   CopyFiles /SILENT "$INSTDIR\resources\wsm.cmd" "$INSTDIR\bin\workspace-manager.cmd"
+  CopyFiles /SILENT "$INSTDIR\resources\wsm.ps1" "$INSTDIR\bin\wsm.ps1"
+  CopyFiles /SILENT "$INSTDIR\resources\wsm.ps1" "$INSTDIR\bin\workspace-manager.ps1"
   CreateDirectory "$APPDATA\workspace-manager"
   CopyFiles /SILENT "$INSTDIR\resources\configure-path.ps1" "$APPDATA\workspace-manager\configure-path.ps1"
   ExecWait '"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$APPDATA\workspace-manager\configure-path.ps1" -Action add -BinDir "$INSTDIR\bin"' $0
@@ -15,6 +17,8 @@
   cli_path_done:
   Delete "$INSTDIR\bin\wsm.cmd"
   Delete "$INSTDIR\bin\workspace-manager.cmd"
+  Delete "$INSTDIR\bin\wsm.ps1"
+  Delete "$INSTDIR\bin\workspace-manager.ps1"
   RMDir "$INSTDIR\bin"
   System::Call 'user32::SendMessageTimeout(i 0xffff, i 0x1A, i 0, t "Environment", i 2, i 5000, *i .r0)'
 !macroend

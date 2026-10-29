@@ -151,8 +151,10 @@ another catalog just because its file is in the same directory. Update the CLI
 and restart the desktop app together when upgrading to this store-bound protocol;
 old endpoint files without a store identity are rejected.
 
-Windows setup installs `wsm.cmd` and `workspace-manager.cmd` on the user PATH,
-using the bundled Electron runtime. On Linux, install both the desktop `.deb`
+Windows setup installs `wsm.ps1` (PowerShell) and `wsm.cmd` (Command Prompt) on
+the user PATH, using the bundled Electron runtime. PowerShell must use the
+`.ps1` wrapper; `wsm.cmd` in GitHub Copilot or VS Code ConPTY fails with
+Access Denied 0x5. On Linux, install both the desktop `.deb`
 and the existing CLI `.deb` to use `wsm start` with the desktop app.
 
 ### Exclusive environment queues
