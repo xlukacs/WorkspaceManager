@@ -58,10 +58,13 @@ export function killChildProcess(child: ChildProcess, options?: { sync?: boolean
 }
 
 export function killPtyProcess(pty: KillablePty, options?: { sync?: boolean }) {
-  killProcessTree(pty.pid, options)
+  // Close the PTY first so Windows ConPTY can AttachConsole while the host is
+  // still alive. taskkill /T /F beforehand tears that console down and leaves
+  // node-pty worker handles that keep Electron from exiting.
   try {
     pty.kill()
   } catch {
     // PTY may already be closed.
   }
+  killProcessTree(pty.pid, options)
 }
