@@ -12,6 +12,7 @@ describe('Windows CLI wrapper', () => {
   it('runs Electron as Node without attaching the GUI exe to the console', () => {
     expect(cmd).toContain('ELECTRON_RUN_AS_NODE=1')
     expect(cmd).toContain('WorkspaceManager.exe')
+    expect(cmd).toContain('%~dp0..\\..\\WorkspaceManager.exe')
     expect(cmd).toMatch(/>"%OUT%"/)
     expect(cmd).toMatch(/2>"%ERR%"/)
     expect(cmd).toContain('type "%OUT%"')

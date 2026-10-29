@@ -1,8 +1,20 @@
 @echo off
 setlocal
 set ELECTRON_RUN_AS_NODE=1
-set "EXE=%~dp0..\WorkspaceManager.exe"
-set "CLI=%~dp0..\resources\app.asar\out\cli\index.js"
+REM bin\wsm.cmd -> ..\WorkspaceManager.exe; bin\cmd\wsm.cmd -> ..\..\WorkspaceManager.exe
+set "ROOT="
+if exist "%~dp0..\WorkspaceManager.exe" (
+  for %%I in ("%~dp0..") do set "ROOT=%%~fI"
+)
+if not defined ROOT if exist "%~dp0..\..\WorkspaceManager.exe" (
+  for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
+)
+if not defined ROOT (
+  echo Workspace Manager CLI executable not found. 1>&2
+  exit /b 1
+)
+set "EXE=%ROOT%\WorkspaceManager.exe"
+set "CLI=%ROOT%\resources\app.asar\out\cli\index.js"
 REM Windows PowerShell 5 (and VS Code/Copilot ConPTY) reads the console buffer of native
 REM commands. WorkspaceManager.exe is a GUI-subsystem binary, so that ReadConsoleOutput
 REM fails with Access Denied 0x5. Redirect so the GUI process never owns the console.
