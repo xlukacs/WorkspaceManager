@@ -39,6 +39,10 @@ try {
     $output = & $command list --store $emptyStore --json
     Assert-True ($LASTEXITCODE -eq 0) "Installed $command failed with a store path containing spaces"
     Assert-True ($output.Trim() -eq '[]') "Unexpected empty catalog output from $command"
+    # Windows PowerShell 5 with $ErrorActionPreference Stop is how start-dev.ps1 runs wsm.
+    $cli = Join-Path $binDir $command
+    powershell.exe -NoProfile -Command "`$ErrorActionPreference='Stop'; & '$cli' --help; exit `$LASTEXITCODE"
+    Assert-True ($LASTEXITCODE -eq 0) "Windows PowerShell 5 failed to run $command --help"
   }
 
   & node "$PSScriptRoot/smoke-packaged-app.mjs" "$installDir/WorkspaceManager.exe"
