@@ -39,12 +39,10 @@ try {
     $output = & $command list --store $emptyStore --json
     Assert-True ($LASTEXITCODE -eq 0) "Installed $command failed with a store path containing spaces"
     Assert-True ($output.Trim() -eq '[]') "Unexpected empty catalog output from $command"
-    # PowerShell 7 wraps native commands and throws 0x5 if Electron owns the console.
-    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
-      $cli = Join-Path $binDir $command
-      pwsh -NoProfile -Command "`$ErrorActionPreference='Stop'; if (Test-Path variable:PSNativeCommandUseErrorActionPreference) { `$PSNativeCommandUseErrorActionPreference=`$true }; & '$cli' --help; exit `$LASTEXITCODE"
-      Assert-True ($LASTEXITCODE -eq 0) "PowerShell 7 failed to run $command --help"
-    }
+    # Windows PowerShell 5 with $ErrorActionPreference Stop is how start-dev.ps1 runs wsm.
+    $cli = Join-Path $binDir $command
+    powershell.exe -NoProfile -Command "`$ErrorActionPreference='Stop'; & '$cli' --help; exit `$LASTEXITCODE"
+    Assert-True ($LASTEXITCODE -eq 0) "Windows PowerShell 5 failed to run $command --help"
   }
 
   & node "$PSScriptRoot/smoke-packaged-app.mjs" "$installDir/WorkspaceManager.exe"
