@@ -137,4 +137,20 @@ describe('running app CLI protocol', () => {
     vi.stubEnv('APPDATA', root)
     expect(await callRunningApp({ action: 'ping' })).toBe('ping')
   })
+
+  it('prefers the installer profile when more than one app endpoint is live', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wsm-profiles-')); directories.push(root)
+    const installed = await startAppCliServer({
+      directory: join(root, 'workspace-manager'), storePath: join(root, 'workspace-manager', 'workspace-manager.json'),
+      handle: async () => 'installed'
+    })
+    const leftover = await startAppCliServer({
+      directory: join(root, 'Workspace Manager'), storePath: join(root, 'Workspace Manager', 'workspace-manager.json'),
+      handle: async () => 'leftover'
+    })
+    servers.push(installed, leftover)
+    vi.stubEnv('XDG_CONFIG_HOME', root)
+    vi.stubEnv('APPDATA', root)
+    expect(await callRunningApp({ action: 'ping' })).toBe('installed')
+  })
 })
