@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { constants, platform } from 'node:os'
 import type { CommandExecutionPlan, CommandRunPlan, ShellPreference } from '@shared/types'
-import { buildShellEnv, getCommandInvocation } from '@shared/shellEnv'
+import { buildShellEnv, getCommandInvocation, toChildProcessArgs } from '@shared/shellEnv'
 import { isLongRunningRunPlan } from '@shared/terminalExecution'
 
 export const DEFAULT_RUN_TIMEOUT_MS = 120_000
@@ -85,12 +85,14 @@ function runStep(
 ): Promise<RunStepResult> {
   return new Promise((resolve) => {
     const invocation = getCommandInvocation(preferredShell, step.shellLine)
-    const child = spawn(invocation.shell, invocation.args, {
+    const { args, windowsVerbatimArguments } = toChildProcessArgs(invocation)
+    const child = spawn(invocation.shell, args, {
       cwd: step.cwd,
       env: buildShellEnv(step.pythonEnvironment, { interactive: false, nodeCaCertificate }),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: platform() !== 'win32',
-      windowsHide: true
+      windowsHide: true,
+      windowsVerbatimArguments
     })
 
     let output = ''

@@ -39,7 +39,15 @@ describe('docker commands', () => {
   it('resolves docker command execution', () => {
     const plan = resolveDockerCommandExecution(composeWorkspace, 'p1::docker::compose-up')
     expect(plan?.cwd).toBe('/tmp/demo')
-    expect(plan?.shellLine).toBe('docker compose -f "compose.yaml" up')
+    expect(plan?.shellLine).toBe('docker compose -f compose.yaml up')
+  })
+
+  it('quotes compose files only when the path needs it', () => {
+    const spaced = resolveDockerCommandExecution(
+      { ...composeWorkspace, docker: { ...composeWorkspace.docker!, composeFile: 'my compose.yaml' } },
+      'p1::docker::compose-up'
+    )
+    expect(spaced?.shellLine).toBe('docker compose -f "my compose.yaml" up')
   })
 
   it('exposes docker prerequisite metadata and resolves chained runs', () => {

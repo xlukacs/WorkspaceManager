@@ -7,7 +7,7 @@ import { normalize } from 'node:path'
 import type { AppSettings, CommandExecutionPlan, CommandRunPlan, ShellPreference, TerminalSession, ResumeTerminalsResult } from '@shared/types'
 import { createDebounced } from '@shared/debounce'
 import { appendTerminalBuffer } from '@shared/terminalBuffer'
-import { buildShellEnv, getCommandInvocation } from '@shared/shellEnv'
+import { buildShellEnv, getCommandInvocation, toChildProcessArgs } from '@shared/shellEnv'
 import { killChildProcess, killPtyProcess, type KillablePty } from '@main/services/processTree'
 
 type PtyProcess = KillablePty & {
@@ -19,7 +19,7 @@ type PtyProcess = KillablePty & {
 
 type PtyFactory = (options: {
   shell: string
-  args: string[]
+  args: string[] | string
   cwd: string
   cols: number
   rows: number
@@ -122,7 +122,7 @@ export class TerminalManager extends EventEmitter {
       const pty = require('node-pty') as {
         spawn: (
           file: string,
-          args: string[],
+          args: string[] | string,
           options: {
             name: string
             cwd: string
@@ -327,12 +327,14 @@ export class TerminalManager extends EventEmitter {
     chained: boolean
   ) {
     const command = getCommandInvocation(this.getShellSettings?.().preferredShell ?? this.preferredShell, step.shellLine)
-    const child = spawn(command.shell, command.args, {
+    const { args, windowsVerbatimArguments } = toChildProcessArgs(command)
+    const child = spawn(command.shell, args, {
       cwd: step.cwd,
       env: buildShellEnv(step.pythonEnvironment, { interactive: false, nodeCaCertificate: this.getShellSettings?.().nodeCaCertificate }),
       stdio: 'pipe',
       detached: platform() !== 'win32',
-      windowsHide: true
+      windowsHide: true,
+      windowsVerbatimArguments
     })
 
     this.children.set(sessionId, child)
