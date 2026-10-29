@@ -885,6 +885,7 @@ describe('TerminalManager', () => {
       expect(env.COMPOSE_ANSI).toBe('always')
       expect(env.TERM).toBe('xterm-256color')
       expect(env.BUILDKIT_PROGRESS).toBeUndefined()
+      expect(env.COMPOSE_PROGRESS).not.toBe('plain')
     } finally {
       if (previousTerm === undefined) delete process.env.TERM
       else process.env.TERM = previousTerm
