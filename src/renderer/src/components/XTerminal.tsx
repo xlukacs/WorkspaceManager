@@ -9,6 +9,7 @@ import type { TerminalSession } from '@shared/types'
 import { containsDomRendererLeak, appendTerminalBuffer, diffTerminalBuffer, sanitizeTerminalBuffer } from '@shared/terminalBuffer'
 import { createDebounced } from '@shared/debounce'
 import { useAppStore } from '@renderer/store/useAppStore'
+import { fitXtermSafely } from '@renderer/components/xtermFit'
 
 export interface XTerminalHandle {
   copy: () => void
@@ -189,8 +190,9 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
     }, PTY_RESIZE_DEBOUNCE_MS)
     const resizeDisposable = terminal.onResize(() => sendSize())
 
-    requestAnimationFrame(() => {
-      fitAddon.fit()
+    let openFrame = requestAnimationFrame(() => {
+      openFrame = 0
+      if (!fitXtermSafely(fitAddon, terminal)) return
       terminal.scrollToBottom()
       sendSize()
     })
@@ -252,11 +254,11 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
       fitFrame = requestAnimationFrame(() => {
         fitFrame = 0
         if (pendingWidth === lastWidth && pendingHeight === lastHeight) return
+        if (!fitXtermSafely(fitAddon, terminal)) return
         lastWidth = pendingWidth
         lastHeight = pendingHeight
         const buffer = terminal.buffer.active
         const atBottom = buffer.viewportY >= buffer.baseY
-        fitAddon.fit()
         if (atBottom) terminal.scrollToBottom()
       })
     })
@@ -264,6 +266,7 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
 
     return () => {
       resizeObserver.disconnect()
+      if (openFrame !== 0) cancelAnimationFrame(openFrame)
       if (fitFrame !== 0) cancelAnimationFrame(fitFrame)
       sendSize.cancel()
       resizeDisposable.dispose()
@@ -352,10 +355,10 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
     const terminal = terminalRef.current
     if (!fitAddon || !terminal) return
 
-    requestAnimationFrame(() => {
-      fitAddon.fit()
-      terminal.scrollToBottom()
+    const frame = requestAnimationFrame(() => {
+      if (fitXtermSafely(fitAddon, terminal)) terminal.scrollToBottom()
     })
+    return () => cancelAnimationFrame(frame)
   }, [consoleFullscreen])
 
   const activeResult = searchResult.resultCount > 0 && searchResult.resultIndex >= 0
