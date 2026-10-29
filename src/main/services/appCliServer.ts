@@ -8,7 +8,7 @@ import { canonicalAppStorePath, sameAppStorePath } from '@shared/appCliStorePath
 export async function startAppCliServer(options: {
   directory: string
   storePath?: string
-  handle: (request: AppCliRequest) => Promise<unknown>
+  handle: ((request: AppCliRequest, signal?: AbortSignal) => Promise<unknown>) & { dispose?: () => void }
   timeoutMs?: number
 }) {
   const token = randomBytes(32).toString('hex')
@@ -17,8 +17,9 @@ export async function startAppCliServer(options: {
   const sockets = new Set<Socket>()
   let queue = Promise.resolve()
   const server = createServer((socket) => {
+    const disconnected = new AbortController()
     sockets.add(socket)
-    socket.once('close', () => sockets.delete(socket))
+    socket.once('close', () => { sockets.delete(socket); disconnected.abort() })
     socket.on('error', () => {})
     socket.setTimeout(options.timeoutMs ?? APP_CLI_TIMEOUT_MS, () => socket.destroy())
     let buffer = Buffer.alloc(0)
@@ -48,11 +49,16 @@ export async function startAppCliServer(options: {
         }
         if (!payload.request || typeof payload.request.action !== 'string') throw new Error('Invalid request.')
         const request = payload.request
-        queue = queue.then(async () => {
+        const dispatch = async () => {
           if (socket.destroyed) return
-          try { reply({ ok: true, result: await options.handle(request) }) }
+          if (request.action === 'run') socket.setTimeout(0)
+          try { reply({ ok: true, result: await options.handle(request, disconnected.signal) }) }
           catch (error) { reply({ ok: false, error: error instanceof Error ? error.message : String(error) }) }
-        })
+        }
+        // Runs pin their scope in the lease manager. Keep other groups and queue
+        // management reachable while a long command executes.
+        if (['run', 'lease-status', 'renew', 'release', 'ping'].includes(request.action)) void dispatch()
+        else queue = queue.then(dispatch)
       } catch (error) {
         reply({ ok: false, error: error instanceof Error ? error.message : String(error) })
       }
@@ -83,6 +89,7 @@ export async function startAppCliServer(options: {
     close() {
       if (closed) return
       closed = true
+      options.handle.dispose?.()
       try {
         const current = JSON.parse(readFileSync(endpointPath, 'utf8')) as AppCliEndpoint
         if (current.token === token) rmSync(endpointPath, { force: true })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAppCliHandler, type AppCliStore } from './appCliActions'
@@ -7,8 +7,10 @@ import { startAppCliServer } from './appCliServer'
 import { TerminalManager } from './terminalManager'
 import { resolveRunPlan } from './workspaceCommands'
 import { runCli } from '@agent/cli'
+import { callRunningApp } from '@agent/appClient'
 import { handleMcpRequest } from '@agent/mcp'
 import { defaultUiState } from '@shared/navigation'
+import type { WorkspaceLease } from '@shared/appCli'
 import type { GroupRecord, WorkspaceRecord } from '@shared/types'
 
 const cleanup: Array<() => void> = []
@@ -30,7 +32,7 @@ async function setup() {
   const changed = vi.fn(), focus = vi.fn()
   const handle = createAppCliHandler({ store, terminals: manager, changed, focus,
     runStoredCommand: async (input) => {
-      const workspace = workspaces[0]!
+      const workspace = workspaces.find((entry) => input.commandId.startsWith(`${entry.id}::`))!
       const plan = resolveRunPlan(workspace, input.commandId, input.worktreePath)!
       return manager.run({ workspaceId: workspace.id, commandId: plan.commandId, title: plan.title,
         worktreePath: input.worktreePath ?? workspace.rootPath, shellLine: plan.shellLine, runPlan: plan })
@@ -104,4 +106,137 @@ describe('CLI and MCP running-app actions', () => {
     const tools = await handleMcpRequest({ id: 1, method: 'tools/list' }, { storePath: ctx.storePath })
     expect((tools as { result: { tools: Array<{ name: string }> } }).result.tools.map((tool) => tool.name)).not.toContain('start_command')
   })
+  it('protects the whole group across CLI and MCP and automatically starts the next queued project', async () => {
+    const ctx = await setup()
+    await ctx.cli(['add', ctx.root, '--group', 'Services', '--name', 'API'])
+    const web = join(ctx.dir, 'web'); mkdirSync(web)
+    writeFileSync(join(web, 'package.json'), JSON.stringify({ name: 'web', scripts: { dev: 'node server.js' } }))
+    await ctx.cli(['add', web, '--group', 'Services', '--name', 'Web'])
+    const owner = JSON.parse((await ctx.cli(['acquire', 'API', '--lease-ms', '600000', '--json'])).output) as WorkspaceLease
+    const started = await ctx.cli(['start', 'API', 'dev', '--lease', owner.leaseId])
+    const firstSession = started.output.trim()
+    expect(started.code).toBe(0)
+    for (const args of [
+      ['start', 'Web', 'dev'], ['start', '--cwd', web, '--', 'echo nope'],
+      ['stop', firstSession], ['pause', '--group', 'Services'], ['resume', '--workspace', 'API'],
+      ['kill-all'], ['focus', 'API'], ['add', web, '--name', 'Renamed']
+    ]) {
+      const blocked = await ctx.cli(args)
+      expect(blocked.code, args.join(' ')).toBe(1)
+      expect(blocked.error).toContain('locked')
+    }
+    const mcp = await handleMcpRequest({ id: 1, method: 'tools/call', params: {
+      name: 'stop_session', arguments: { sessionId: firstSession }
+    } }, { storePath: ctx.storePath }) as { result: { isError: boolean } }
+    expect(mcp.result.isError).toBe(true)
+    expect(ctx.manager.list().find((session) => session.id === firstSession)?.status).toBe('running')
+
+    let output = '', progress = ''
+    const waiting = runCli(['--store', ctx.storePath, 'start', 'Web', 'dev', '--wait', '--lease-ms', '600000', '--json'], {
+      stdout: (text) => { output += text }, stderr: (text) => { progress += text }
+    })
+    await vi.waitFor(() => expect(progress).toContain('Environment queued'))
+    expect(ctx.manager.list().filter((session) => session.status === 'running')).toHaveLength(1)
+    await ctx.cli(['release', owner.leaseId])
+    expect(await waiting).toBe(0)
+    const next = JSON.parse(output) as { sessionId: string; lease: WorkspaceLease }
+    expect(next.lease.state).toBe('started')
+    expect(progress).toContain('Environment started')
+    expect(ctx.manager.list().find((session) => session.id === firstSession)?.status).toBe('stopped')
+    expect(ctx.manager.list().find((session) => session.id === next.sessionId)?.status).toBe('running')
+    expect((await ctx.cli(['stop', next.sessionId, '--lease', owner.leaseId])).code).toBe(1)
+    expect((await ctx.cli(['stop', next.sessionId, '--lease', next.lease.leaseId])).code).toBe(0)
+  })
+
+  it('coordinates headless CLI and MCP runs and aborts an owner on release', async () => {
+    const ctx = await setup()
+    writeFileSync(join(ctx.root, 'package.json'), JSON.stringify({ name: 'demo', scripts: {
+      build: `node -e "console.log('built')"`,
+      hold: 'node hold.cjs'
+    } }))
+    writeFileSync(join(ctx.root, 'hold.cjs'), `require('fs').writeFileSync('ready', 'ready'); setInterval(() => {}, 1000)` )
+    await ctx.cli(['add', ctx.root, '--group', 'Services'])
+    writeFileSync(ctx.storePath, JSON.stringify({ version: 12, groups: ctx.store.getGroups(),
+      workspaces: ctx.store.getWorkspaceRecords(), terminals: [], settings: { preferredShell: 'bash' } }))
+    const owner = await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 }) as WorkspaceLease
+    expect((await ctx.cli(['run', 'demo', 'build'])).error).toContain('locked')
+    const mcp = await handleMcpRequest({ id: 1, method: 'tools/call', params: {
+      name: 'run_command', arguments: { project: 'demo', command: 'build' }
+    } }, { storePath: ctx.storePath }) as { result: { isError: boolean } }
+    expect(mcp.result.isError).toBe(true)
+    const result = await ctx.cli(['run', 'demo', 'build', '--lease', owner.leaseId, '--json'])
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.output).steps[0].output).toContain('built')
+    const next = await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 }) as WorkspaceLease
+    const running = ctx.cli(['run', 'demo', 'hold', '--lease', owner.leaseId, '--timeout', '0', '--json'])
+    await vi.waitFor(() => expect(existsSync(join(ctx.root, 'ready'))).toBe(true))
+    await ctx.handle({ action: 'release', leaseId: owner.leaseId })
+    expect((await running).code).not.toBe(0)
+    expect(await ctx.handle({ action: 'lease-status', leaseId: next.leaseId })).toMatchObject({ state: 'started' })
+    await ctx.handle({ action: 'release', leaseId: next.leaseId })
+    const automatic = await ctx.cli(['run', 'demo', 'build', '--wait', '--lease-ms', '600000', '--json'])
+    expect(automatic.code).toBe(0)
+    expect(JSON.parse(automatic.output).exitCode).toBe(0)
+    const free = await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 }) as WorkspaceLease
+    expect(free.state).toBe('started')
+  })
+
+  it('cancels an interrupted CLI waiter without admitting it', async () => {
+    const ctx = await setup()
+    await ctx.cli(['add', ctx.root])
+    const owner = await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 }) as WorkspaceLease
+    let progress = ''
+    const waiter = runCli(['--store', ctx.storePath, 'acquire', 'demo', '--wait', '--lease-ms', '600000'], {
+      stdout: () => {}, stderr: (text) => { progress += text }
+    })
+    await vi.waitFor(() => expect(progress).toContain('Environment queued'))
+    process.emit('SIGINT')
+    expect(await waiter).toBe(1)
+    expect(progress).toContain('cancelled')
+    await ctx.handle({ action: 'release', leaseId: owner.leaseId })
+    expect(await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 })).toMatchObject({ state: 'started' })
+  })
+
+  it('aborts disconnected headless clients and admits the queued owner', async () => {
+    const ctx = await setup()
+    writeFileSync(join(ctx.root, 'package.json'), JSON.stringify({ name: 'demo', scripts: { hold: 'node hold.cjs' } }))
+    writeFileSync(join(ctx.root, 'hold.cjs'), `require('fs').writeFileSync('ready', 'ready'); setInterval(() => {}, 1000)`)
+    await ctx.cli(['add', ctx.root])
+    const running = callRunningApp({ action: 'run', workspace: 'demo', command: 'hold', timeoutMs: 0 }, {
+      storePath: ctx.storePath, timeoutMs: 1000
+    }).catch((error: Error) => error.message)
+    await vi.waitFor(() => expect(existsSync(join(ctx.root, 'ready'))).toBe(true))
+    const next = await ctx.handle({ action: 'acquire', workspace: 'demo', leaseMs: 600_000 }) as WorkspaceLease
+    expect(next.state).toBe('queued')
+    expect(await running).toContain('timed out')
+    await vi.waitFor(async () => {
+      expect(await ctx.handle({ action: 'lease-status', leaseId: next.leaseId })).toMatchObject({ state: 'started' })
+    })
+  })
+
+  it('requires an explicit duration and rejects leases longer than ten minutes through CLI and MCP', async () => {
+    const ctx = await setup()
+    await ctx.cli(['add', ctx.root])
+    for (const flags of [[], ['--lease-ms', '600001'], ['--lease-ms', '0']]) {
+      const result = await ctx.cli(['acquire', 'demo', ...flags])
+      expect(result.code).toBe(1)
+      expect(result.error).toContain('--lease-ms')
+    }
+    const missingStartDuration = await ctx.cli(['start', 'demo', 'dev', '--wait'])
+    expect(missingStartDuration.code).toBe(1)
+    expect(ctx.manager.list()).toHaveLength(0)
+    for (const args of [{ workspace: 'demo' }, { workspace: 'demo', leaseMs: 600001 }]) {
+      const response = await handleMcpRequest({ id: 1, method: 'tools/call', params: {
+        name: 'acquire_environment', arguments: args
+      } }, { storePath: ctx.storePath }) as { result: { isError: boolean; content: Array<{ text: string }> } }
+      expect(response.result.isError).toBe(true)
+      expect(response.result.content[0].text).toContain('leaseMs')
+    }
+    const valid = await ctx.cli(['acquire', 'demo', '--lease-ms', '600000', '--json'])
+    expect(valid.code).toBe(0)
+    const lease = JSON.parse(valid.output) as WorkspaceLease
+    expect(lease.state).toBe('started')
+    expect(lease.expiresAt! - lease.startedAt!).toBe(600000)
+  })
+
 })

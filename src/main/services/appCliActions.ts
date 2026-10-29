@@ -8,8 +8,10 @@ import type { TerminalSession } from '@shared/types'
 import { findWorkspace, resolveRunnable, type AgentCatalog } from '@agent/catalog'
 import { normalizeComparePath } from '@shared/worktreeExecution'
 import { scanWorkspace } from './workspaceScan'
+import { WorkspaceLeases } from './workspaceLeases'
+import { DEFAULT_RUN_TIMEOUT_MS, executeRunPlan } from '@agent/runCommand'
 
-export type AppCliStore = Pick<AppStore, 'getGroups' | 'setGroups' | 'getWorkspaceRecords' | 'upsertWorkspaceRecord' | 'getUiState' | 'setUiState' | 'getPreferredShell'>
+export type AppCliStore = Pick<AppStore, 'getGroups' | 'setGroups' | 'getWorkspaceRecords' | 'upsertWorkspaceRecord' | 'getUiState' | 'setUiState' | 'getPreferredShell'> & Partial<Pick<AppStore, 'getSettings'>>
 export function createAppCliHandler(deps: {
   store: AppCliStore
   terminals: TerminalManager
@@ -63,7 +65,7 @@ export function createAppCliHandler(deps: {
     }
     throw new Error('Select --workspace or --group.')
   }
-  return async (request: AppCliRequest): Promise<unknown> => {
+  const perform = async (request: AppCliRequest, signal: AbortSignal): Promise<unknown> => {
     if (request.action === 'ping') return { running: true }
     if (request.action === 'add') {
       const path = text(request.cwd)
@@ -71,6 +73,15 @@ export function createAppCliHandler(deps: {
       const workspace = await add(path, request)
       select(workspace.id); deps.changed()
       return workspace
+    }
+    if (request.action === 'run') {
+      const resolved = resolveRunnable(catalog(), { project: request.workspace, command: request.command!, worktree: request.worktree })
+      const timeoutMs = request.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new Error('timeoutMs must be a non-negative integer.')
+      const result = await executeRunPlan(resolved.plan, { preferredShell: store.getPreferredShell(),
+        nodeCaCertificate: store.getSettings?.().nodeCaCertificate, timeoutMs, signal })
+      return { project: { id: resolved.workspace.id, name: resolved.workspace.name, rootPath: resolved.workspace.rootPath },
+        command: { id: resolved.command.id, title: resolved.command.title, kind: resolved.command.kind }, ...result }
     }
     if (request.action === 'start') {
       let session: TerminalSession
@@ -125,15 +136,15 @@ export function createAppCliHandler(deps: {
     }
     if (['stop', 'pause', 'resume', 'kill-all'].includes(request.action)) {
       let result: unknown
-      if (request.action === 'kill-all') result = await terminals.stopAll()
+      if (request.action === 'kill-all') result = await terminals.stopAll({ force: true })
       else if (request.action === 'stop' && text(request.sessionId)) {
         if (text(request.workspace) || text(request.group)) throw new Error('Choose a session or a workspace/group.')
-        result = await terminals.stop(request.sessionId!)
+        result = await terminals.stop(request.sessionId!, { force: true })
         if (!result) throw new Error('Unknown session.')
       } else {
         const ids = selectedWorkspaceIds(request)
-        result = request.action === 'pause' ? await terminals.pauseGroup(ids)
-          : request.action === 'resume' ? await terminals.resumeGroup(ids) : await terminals.stopGroup(ids)
+        result = request.action === 'pause' ? await terminals.pauseGroup(ids, { force: true })
+          : request.action === 'resume' ? await terminals.resumeGroup(ids) : await terminals.stopGroup(ids, { force: true })
       }
       deps.changed()
       // Output buffers are available separately, keeping list/control responses bounded.
@@ -143,4 +154,73 @@ export function createAppCliHandler(deps: {
     }
     throw new Error(`Unknown app action: ${request.action}`)
   }
+
+  const scopeOf = (workspace: { id: string; groupId: string | null }) => workspace.groupId ? `group:${workspace.groupId}` : `workspace:${workspace.id}`
+  const leases = new WorkspaceLeases(async (ids, scope) => {
+    const currentIds = store.getWorkspaceRecords().filter((workspace) => scopeOf(workspace) === scope).map((workspace) => workspace.id)
+    await terminals.stopGroup([...new Set([...ids, ...currentIds])], { force: true })
+    deps.changed()
+  })
+  const cwdWorkspace = (path: string) => {
+    const target = normalizeComparePath(realpathSync(resolve(path)))
+    return store.getWorkspaceRecords().flatMap((workspace) => [workspace.rootPath, ...workspace.gitWorktrees.filter((tree) => !tree.isBare && !tree.isMissing).map((tree) => tree.path)]
+      .map((checkout) => ({ workspace, checkout: normalizeComparePath(checkout) })))
+      .filter(({ checkout }) => target === checkout || target.startsWith(checkout + '/'))
+      .sort((a, b) => b.checkout.length - a.checkout.length)[0]?.workspace
+  }
+  const scopeForGroup = (query: string) => `group:${group(query).id}`
+  const targets = (request: AppCliRequest): string[] => {
+    if (text(request.workspace) && text(request.group)) throw new Error('Choose either --workspace or --group.')
+    if (request.action === 'add') {
+      if (!text(request.cwd)) throw new Error('A workspace path is required.')
+      const existing = store.getWorkspaceRecords().find((workspace) => normalizeComparePath(workspace.rootPath) === normalizeComparePath(realpathSync(resolve(request.cwd!))))
+      const parent = cwdWorkspace(request.cwd!)
+      const scopes = existing ? [scopeOf(existing)] : parent ? [scopeOf(parent)] : []
+      if (text(request.group)) {
+        const matches = store.getGroups().filter((entry) => entry.id === request.group || entry.name.toLowerCase() === request.group!.toLowerCase())
+        if (matches.length > 1) throw new Error(`Ambiguous group: ${request.group}`)
+        scopes.push(matches[0] ? `group:${matches[0].id}` : `new-group:${request.group!.toLowerCase()}`)
+      }
+      return scopes.length ? scopes : [`path:${normalizeComparePath(realpathSync(resolve(request.cwd!)))}`]
+    }
+    if (request.action === 'start' && text(request.cwd)) {
+      const workspace = cwdWorkspace(request.cwd!)
+      return workspace ? [scopeOf(workspace)] : targets({ ...request, action: 'add' })
+    }
+    if (request.action === 'start' || request.action === 'run') {
+      const resolved = resolveRunnable(catalog(), { project: request.workspace, command: request.command ?? '', worktree: request.worktree })
+      return [scopeOf(resolved.workspace)]
+    }
+    if (text(request.sessionId)) {
+      const session = terminals.list().find((entry) => entry.id === request.sessionId)
+      if (!session) throw new Error('Unknown session.')
+      const workspace = store.getWorkspaceRecords().find((entry) => entry.id === session.workspaceId)
+      if (!workspace) throw new Error('Unknown workspace for session.')
+      // Include both targets before focus validates mismatched selectors.
+      return [scopeOf(workspace), ...(text(request.workspace) ? [scopeOf(findWorkspace(catalog(), request.workspace!))] : [])]
+    }
+    if (request.action === 'kill-all' || (request.action === 'focus' && !text(request.workspace))) {
+      return [...store.getWorkspaceRecords().map(scopeOf), ...store.getGroups().map((entry) => `group:${entry.id}`)]
+    }
+    if (text(request.group)) return [scopeForGroup(request.group!)]
+    return selectedWorkspaceIds(request).map((id) => scopeOf(findWorkspace(catalog(), id)))
+  }
+  const handle = async (request: AppCliRequest, clientSignal?: AbortSignal): Promise<unknown> => {
+    if (request.action === 'acquire') {
+      const ids = selectedWorkspaceIds(request)
+      const scope = text(request.group) ? scopeForGroup(request.group!) : scopeOf(findWorkspace(catalog(), ids[0]))
+      const workspaceIds = store.getWorkspaceRecords().filter((workspace) => scopeOf(workspace) === scope).map((workspace) => workspace.id)
+      return leases.acquire(scope, workspaceIds, request.leaseMs, text(request.label))
+    }
+    if (['lease-status', 'renew', 'release'].includes(request.action)) {
+      if (!text(request.leaseId)) throw new Error('A lease ID is required.')
+      return request.action === 'release' ? leases.release(request.leaseId!)
+        : request.action === 'renew' ? leases.renew(request.leaseId!, request.leaseMs) : leases.status(request.leaseId!)
+    }
+    if (['ping', 'sessions', 'output'].includes(request.action)) return perform(request, new AbortController().signal)
+    if (!['add', 'start', 'run', 'stop', 'pause', 'resume', 'kill-all', 'focus'].includes(request.action)) throw new Error(`Unknown app action: ${request.action}`)
+    return leases.control(targets(request), request.leaseId, (signal) => perform(request,
+      request.action === 'run' && clientSignal ? AbortSignal.any([signal, clientSignal]) : signal))
+  }
+  return Object.assign(handle, { dispose: () => leases.dispose() })
 }

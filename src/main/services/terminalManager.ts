@@ -424,11 +424,11 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
-  async stop(sessionId: string, options?: { workspacePaused?: boolean }) {
+  async stop(sessionId: string, options?: { workspacePaused?: boolean; force?: boolean }) {
     const current = this.sessions.get(sessionId)
     if (!current) return null
     this.manuallyStopped.add(sessionId)
-    this.killSessionProcesses(sessionId)
+    this.killSessionProcesses(sessionId, { sync: options?.force })
     current.status = 'stopped'
     current.workspacePaused = options?.workspacePaused ?? false
     current.updatedAt = Date.now()
@@ -438,40 +438,40 @@ export class TerminalManager extends EventEmitter {
     return current
   }
 
-  async stopAll() {
+  async stopAll(options?: { force?: boolean }) {
     const updated: TerminalSession[] = []
     for (const session of this.sessions.values()) {
       if (session.status !== 'running') continue
-      const next = await this.stop(session.id)
+      const next = await this.stop(session.id, options)
       if (next) updated.push(next)
     }
     return updated
   }
 
-  async pauseWorkspace(workspaceId: string) {
+  async pauseWorkspace(workspaceId: string, options?: { force?: boolean }) {
     const updated: TerminalSession[] = []
     for (const session of this.sessions.values()) {
       if (session.workspaceId !== workspaceId || session.status !== 'running') continue
-      const next = await this.stop(session.id, { workspacePaused: true })
+      const next = await this.stop(session.id, { workspacePaused: true, ...options })
       if (next) updated.push(next)
     }
     return updated
   }
 
-  async pauseGroup(workspaceIds: string[]) {
+  async pauseGroup(workspaceIds: string[], options?: { force?: boolean }) {
     const sessions: TerminalSession[] = []
     for (const workspaceId of new Set(workspaceIds)) {
-      sessions.push(...await this.pauseWorkspace(workspaceId))
+      sessions.push(...await this.pauseWorkspace(workspaceId, options))
     }
     return sessions
   }
 
-  async stopGroup(workspaceIds: string[]) {
+  async stopGroup(workspaceIds: string[], options?: { force?: boolean }) {
     const ids = new Set(workspaceIds)
     const sessions: TerminalSession[] = []
     for (const session of this.snapshot()) {
       if (!ids.has(session.workspaceId) || (session.status !== 'running' && !session.workspacePaused)) continue
-      const stopped = await this.stop(session.id)
+      const stopped = await this.stop(session.id, options)
       if (stopped) sessions.push(stopped)
     }
     return sessions

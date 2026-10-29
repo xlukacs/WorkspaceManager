@@ -12,7 +12,7 @@ Use `pnpm test` to run the test suite.
 
 ## Agent CLI and MCP
 
-The same workspace catalog the app uses is available as a CLI and as an MCP server. Both read the Workspace Manager store (created when you open the app, or set `WORKSPACE_MANAGER_STORE`).
+The same workspace catalog the app uses is available as a CLI and as an MCP server. Both read the Workspace Manager store (created when you open the app, or set `WORKSPACE_MANAGER_STORE`). Executing commands requires the running desktop app, which coordinates exclusive environment ownership. Catalog inspection and dry runs also work offline.
 
 ```bash
 workspace-manager list
@@ -44,7 +44,7 @@ Start a local HTTP MCP server that uses your user store and host toolchain:
 systemctl --user enable --now workspace-manager-mcp
 ```
 
-That listens on `http://127.0.0.1:3847/mcp`. This is the best option for `run_command`, because it runs on the host.
+That listens on `http://127.0.0.1:3847/mcp`. Keep the desktop app running with the same store; it executes `run_command` on the host and enforces environment leases.
 
 ### MCP over HTTP (agents connect by URL)
 
@@ -91,7 +91,7 @@ pnpm mcp:docker
 
 Agents still connect to `http://127.0.0.1:3847/mcp`. The port is published on `127.0.0.1` only; set `MCP_BIND=0.0.0.0` together with `MCP_TOKEN` if other machines need it. With Docker Desktop, both directories must be under a path listed in Settings → Resources → File sharing.
 
-`run_command` only has the tools in the image (Node, npm, pnpm, git), and it writes to your real checkouts. Installing dependencies from the container leaves `node_modules` built for the container, not your host. Prefer the systemd user service on the host when agents need to install, build, or use the full local toolchain.
+The default Docker network supports catalog inspection and dry runs. Command execution and lease management require access to the desktop app’s loopback endpoint and are unavailable through the default container network. Use the systemd user service on the host for execution and queues.
 
 ## Build Outputs
 
@@ -125,7 +125,7 @@ Build from Windows for the most reliable packaging result.
 
 ### Commands for the running app
 
-`wsm run <workspace> <command>` runs headlessly, waits and returns an exit code.
+`wsm run <workspace> <command>` runs without a GUI console through the running app, waits and returns an exit code. Output is captured and returned when the command finishes.
 `wsm start <workspace> <command>` hands off to the running desktop app and prints
 its console session id. Use `wsm sessions --json`, `wsm stop <id>`,
 `wsm pause --group <name>`, `wsm resume --workspace <name>`, `wsm kill-all`, and
@@ -154,6 +154,76 @@ old endpoint files without a store identity are rejected.
 Windows setup installs `wsm.cmd` and `workspace-manager.cmd` on the user PATH,
 using the bundled Electron runtime. On Linux, install both the desktop `.deb`
 and the existing CLI `.deb` to use `wsm start` with the desktop app.
+
+### Exclusive environment queues
+
+A workspace group is one environment queue; all its workspaces and git worktrees
+share ownership. Ungrouped workspaces each have their own queue. Different groups
+can hold leases independently. A reservation starts immediately when free, or
+waits in FIFO order. The agent must supply `--lease-ms` when acquiring a lease,
+with a duration from 1 to 600000 milliseconds (10 minutes). There is no default.
+The countdown starts when admitted, so time in the queue does not consume it.
+Ten minutes from admission is a hard deadline, including any renewals.
+
+`wsm lease` and `wsm queue` print the CLI help for this system. Subcommands
+`acquire`, `status`, `renew`, and `release` are aliases for the same commands
+below.
+
+Queue a GUI command and automatically launch it when its environment is available:
+
+```bash
+wsm start api dev --wait --lease-ms 600000 --json
+```
+
+Progress (`Environment queued`, queue position, then `Environment started`) goes
+to stderr. JSON stdout contains `sessionId` and `lease`, including the private
+`leaseId`. The lease stays active after `start` returns so the agent can continue
+working. Release it when done; command exit alone does not release this lease.
+
+For several commands under one reservation:
+
+```bash
+export WORKSPACE_MANAGER_LEASE=$(wsm acquire api --wait --lease-ms 600000)
+wsm start api dev
+wsm run api build
+wsm lease-status "$WORKSPACE_MANAGER_LEASE"
+wsm renew "$WORKSPACE_MANAGER_LEASE" --lease-ms 600000
+wsm release "$WORKSPACE_MANAGER_LEASE"
+unset WORKSPACE_MANAGER_LEASE
+```
+
+`--lease <id>` is an alternative to the environment variable. Use
+`wsm acquire --group Services --lease-ms 600000 --wait` to reserve an existing group directly.
+Without `--wait`, `acquire --lease-ms 600000 --json` returns immediately with `state: queued` or
+`state: started`; poll `lease-status` until it starts. Only the started lease can
+control the reserved group. `release` also cancels a queued request. Interrupting
+an `acquire/start/run --wait` waiter cancels its queued reservation.
+
+For a single headless task, `wsm run api build --wait --lease-ms 600000` queues, runs, and releases
+a temporary lease automatically, including on failure. Its command timeout starts
+after admission. `start --cwd ... --wait` requires an existing `--group`; register
+the folder in that group first.
+
+While reserved, starts, runs, stops, pause/resume, registration changes, and focus
+requests must carry the active lease. Broad controls such as `kill-all` cannot
+cross another group's reservation; use scoped stop commands. Controls without a
+lease continue to work in unreserved environments. Read-only discovery, session
+listing, and output inspection stay available. These rules apply to CLI and MCP;
+the desktop user's controls remain available.
+
+Release or expiry aborts the owner's headless command and stops group consoles
+before admitting the next waiter, preserving console history and pins. A cleanup
+failure blocks admission until cleanup succeeds. Renew an active lease with an
+explicit duration to extend it within the original 10-minute hard limit; renewal never resets that limit. Queued, expired, and
+released tokens cannot control anything. Manual release is optional: expiry
+automatically cleans up and hands off even if the agent forgets to release.
+Leases and queues are local to the running app and reset on app restart; stale tokens fail
+and agents must acquire again.
+
+MCP exposes `acquire_environment`, `get_environment_lease`,
+`renew_environment_lease`, and `release_environment` while the app is reachable.
+Pass the returned `leaseId` to `start_command`, `run_command`, or `stop_session`.
+A queued MCP reservation returns immediately so the agent can poll its status.
 
 ### Settings
 

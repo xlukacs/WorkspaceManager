@@ -1,7 +1,8 @@
 import { callRunningApp } from './appClient'
 import { resolve } from 'node:path'
-import type { AppCliRequest } from '@shared/appCli'
-import { CLI_HELP, flagBoolean, flagString, parseCliArgs } from '@agent/parseCli'
+import type { AppCliRequest, WorkspaceLease } from '@shared/appCli'
+import { acquireLeaseFromCli } from './leaseClient'
+import { CLI_HELP, flagBoolean, flagString, parseCliArgs, rewriteLeaseAlias } from '@agent/parseCli'
 import {
   findWorkspace,
   getWorkspaceDetails,
@@ -52,8 +53,8 @@ function formatWorkspaceRows(workspaces: WorkspaceSummary[]) {
 
 function parseTimeout(value: string | undefined) {
   if (value === undefined) return DEFAULT_RUN_TIMEOUT_MS
-  const parsed = Number.parseInt(value, 10)
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Timeout must be a non-negative integer (milliseconds).')
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error('Timeout must be a non-negative integer (milliseconds).')
   return parsed
 }
 
@@ -89,13 +90,31 @@ async function runCommandAction(catalog: AgentCatalog, parsed: ReturnType<typeof
   })
   const json = flagBoolean(parsed.flags, 'json')
   const dryRun = flagBoolean(parsed.flags, 'dry-run')
-  const result = await executeRunPlan(plan, {
-    preferredShell: catalog.preferredShell,
-    nodeCaCertificate: catalog.nodeCaCertificate,
-    timeoutMs: parseTimeout(flagString(parsed.flags, 'timeout')),
-    dryRun,
-    onChunk: json ? undefined : (chunk) => io.stdout(chunk)
-  })
+  const options = { storePath: flagString(parsed.flags, 'store') }
+  const timeoutMs = parseTimeout(flagString(parsed.flags, 'timeout'))
+  const suppliedLease = flagString(parsed.flags, 'lease') ?? process.env.WORKSPACE_MANAGER_LEASE
+  let reservation: WorkspaceLease | undefined
+  if (!dryRun && flagBoolean(parsed.flags, 'wait')) {
+    if (suppliedLease) throw new Error('Choose --wait or an existing --lease, not both.')
+    reservation = await acquireLeaseFromCli({ ...parsed, positionals: [], flags: { ...parsed.flags, workspace: workspace.id } }, io)
+  }
+  let result: Awaited<ReturnType<typeof executeRunPlan>>
+  try {
+    result = dryRun ? await executeRunPlan(plan, {
+      preferredShell: catalog.preferredShell,
+      nodeCaCertificate: catalog.nodeCaCertificate,
+      timeoutMs,
+      dryRun
+    }) : await callRunningApp({
+      action: 'run', workspace: workspace.id, command: command.id,
+      worktree: flagString(parsed.flags, 'worktree'), leaseId: reservation?.leaseId ?? suppliedLease,
+      timeoutMs
+    }, { ...options, timeoutMs: 0 }) as Awaited<ReturnType<typeof executeRunPlan>>
+  } finally {
+    if (reservation) await callRunningApp({ action: 'release', leaseId: reservation.leaseId }, options)
+  }
+  if (!json && !dryRun) for (const step of result.steps) io.stdout(step.output)
+
   const payload = {
     project: { id: workspace.id, name: workspace.name, rootPath: workspace.rootPath },
     command: { id: command.id, title: command.title, kind: command.kind },
@@ -114,11 +133,13 @@ async function runCommandAction(catalog: AgentCatalog, parsed: ReturnType<typeof
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<number> {
   try {
-    const parsed = parseCliArgs(argv)
+    const parsed = rewriteLeaseAlias(parseCliArgs(argv))
     if (parsed.command === 'help' || flagBoolean(parsed.flags, 'help')) {
       io.stdout(CLI_HELP)
       return 0
     }
+
+    if (flagBoolean(parsed.flags, 'wait') && !['acquire', 'start', 'run'].includes(parsed.command)) throw new Error('--wait is supported by acquire, start, and run.')
 
     if (parsed.command === 'mcp') {
       const storePath = flagString(parsed.flags, 'store')
@@ -151,9 +172,26 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<num
       return 0
     }
 
+    if (parsed.command === 'acquire') {
+      const lease = await acquireLeaseFromCli(parsed, io)
+      if (flagBoolean(parsed.flags, 'json')) printJson(io, lease)
+      else io.stdout(`${lease.leaseId}\n`)
+      return 0
+    }
+    if (['lease-status', 'renew', 'release'].includes(parsed.command)) {
+      const leaseId = parsed.positionals[0] ?? flagString(parsed.flags, 'lease') ?? process.env.WORKSPACE_MANAGER_LEASE
+      if (!leaseId) throw new Error('A lease ID is required.')
+      const duration = flagString(parsed.flags, 'lease-ms')
+      const lease = await callRunningApp({ action: parsed.command as AppCliRequest['action'], leaseId,
+        leaseMs: duration === undefined ? undefined : Number(duration) }, { storePath: flagString(parsed.flags, 'store') }) as WorkspaceLease
+      printJson(io, lease)
+      return 0
+    }
+
     if (['add', 'start', 'sessions', 'stop', 'pause', 'resume', 'kill-all', 'focus'].includes(parsed.command)) {
       const request: AppCliRequest = {
         action: parsed.command as AppCliRequest['action'],
+        leaseId: flagString(parsed.flags, 'lease') ?? process.env.WORKSPACE_MANAGER_LEASE,
         workspace: flagString(parsed.flags, 'workspace'), group: flagString(parsed.flags, 'group'),
         name: flagString(parsed.flags, 'name'), label: flagString(parsed.flags, 'label'),
         worktree: flagString(parsed.flags, 'worktree'), sessionId: flagString(parsed.flags, 'session'),
@@ -177,8 +215,23 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<num
       }
       if (parsed.command === 'stop') request.sessionId = request.sessionId ?? parsed.positionals[0]
       if (parsed.command === 'focus') request.workspace = request.workspace ?? parsed.positionals[0]
-      const result = await callRunningApp(request, { storePath: flagString(parsed.flags, 'store') })
-      if (flagBoolean(parsed.flags, 'json')) printJson(io, result)
+      const options = { storePath: flagString(parsed.flags, 'store') }
+      let reservation: WorkspaceLease | undefined
+      if (parsed.command === 'start' && flagBoolean(parsed.flags, 'wait')) {
+        if (request.leaseId) throw new Error('Choose --wait or an existing --lease, not both.')
+        if (request.cwd && !request.group) throw new Error('start --cwd --wait requires --group. Register the workspace first.')
+        reservation = await acquireLeaseFromCli({ ...parsed, positionals: [], flags: {
+          ...parsed.flags, ...(request.workspace ? { workspace: request.workspace } : {})
+        } }, io)
+        request.leaseId = reservation.leaseId
+      }
+      let result: unknown
+      try { result = await callRunningApp(request, options) }
+      catch (error) {
+        if (reservation) await callRunningApp({ action: 'release', leaseId: reservation.leaseId }, options)
+        throw error
+      }
+      if (flagBoolean(parsed.flags, 'json')) printJson(io, reservation ? { ...(result as object), lease: reservation } : result)
       else if (parsed.command === 'start') io.stdout(`${(result as { sessionId: string }).sessionId}\n`)
       else if (parsed.command === 'sessions') {
         for (const session of result as Array<{ id: string; title: string; status: string; workspaceId: string; worktreePath: string | null }>) {

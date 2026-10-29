@@ -1,5 +1,5 @@
 import { callRunningApp, runningAppAvailable } from './appClient'
-import type { AppCliRequest } from '@shared/appCli'
+import { MAX_LEASE_MS, type AppCliRequest } from '@shared/appCli'
 import { createInterface } from 'node:readline'
 import {
   findWorkspace,
@@ -111,7 +111,7 @@ export const MCP_TOOLS = [
   {
     name: 'run_command',
     description:
-      'Run a Workspace Manager command (npm/pnpm/yarn script, docker helper, or Run action) in that workspace. Long-running commands (dev/watch) are killed at timeoutMs (default 120000; 0 waits forever).',
+      'Run a Workspace Manager command through the running desktop app, respecting group leases. Long-running commands (dev/watch) are killed at timeoutMs (default 120000; 0 waits forever).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -131,6 +131,7 @@ export const MCP_TOOLS = [
           type: 'number',
           description: `Kill after this many milliseconds. Default ${DEFAULT_RUN_TIMEOUT_MS}. 0 means no timeout.`
         },
+        leaseId: { type: 'string', description: 'Lease from acquire_environment (or WORKSPACE_MANAGER_LEASE).' },
         dryRun: {
           type: 'boolean',
           description: 'Resolve the plan without executing.'
@@ -143,9 +144,13 @@ export const MCP_TOOLS = [
 ] as const
 
 export const LIVE_MCP_TOOLS = [
+  { name: 'acquire_environment', description: 'Reserve a workspace group exclusively. Returns started or queued with a private leaseId. Poll get_environment_lease until started; then pass leaseId to controls. leaseMs is required and capped at 600000 (10 minutes). Expiry stops group consoles and admits the next waiter.', inputSchema: { type: 'object', properties: { workspace: { type: 'string' }, group: { type: 'string' }, leaseMs: { type: 'integer', minimum: 1, maximum: MAX_LEASE_MS }, label: { type: 'string' } }, required: ['leaseMs'], additionalProperties: false } },
+  { name: 'get_environment_lease', description: 'Get queue position and lease state. Only started leases may control the environment.', inputSchema: { type: 'object', properties: { leaseId: { type: 'string' } }, required: ['leaseId'], additionalProperties: false } },
+  { name: 'renew_environment_lease', description: 'Extend an active lease within its hard limit of 10 minutes from admission; renewal cannot reset this limit.', inputSchema: { type: 'object', properties: { leaseId: { type: 'string' }, leaseMs: { type: 'integer', minimum: 1, maximum: MAX_LEASE_MS } }, required: ['leaseId', 'leaseMs'], additionalProperties: false } },
+  { name: 'release_environment', description: 'Release an environment or cancel a queued reservation. Stops group consoles and admits the next agent after cleanup.', inputSchema: { type: 'object', properties: { leaseId: { type: 'string' } }, required: ['leaseId'], additionalProperties: false } },
   { name: 'list_sessions', description: 'List consoles in the running app.', inputSchema: { type: 'object', properties: { workspace: { type: 'string' }, group: { type: 'string' }, running: { type: 'boolean' } }, additionalProperties: false } },
-  { name: 'start_command', description: 'Start a stored command in a GUI console and return its session id.', inputSchema: { type: 'object', properties: { workspace: { type: 'string' }, command: { type: 'string' }, worktree: { type: 'string' } }, required: ['workspace', 'command'], additionalProperties: false } },
-  { name: 'stop_session', description: 'Stop one GUI console.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'], additionalProperties: false } },
+  { name: 'start_command', description: 'Start a stored command in a GUI console and return its session id.', inputSchema: { type: 'object', properties: { workspace: { type: 'string' }, command: { type: 'string' }, worktree: { type: 'string' }, leaseId: { type: 'string' } }, required: ['workspace', 'command'], additionalProperties: false } },
+  { name: 'stop_session', description: 'Stop one GUI console.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, leaseId: { type: 'string' } }, required: ['sessionId'], additionalProperties: false } },
   { name: 'get_session_output', description: 'Read the last N KiB of a GUI console buffer (default 16, maximum 256).', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, limitKb: { type: 'number', minimum: 1, maximum: 256 } }, required: ['sessionId'], additionalProperties: false } }
 ] as const
 
@@ -207,11 +212,12 @@ export async function handleMcpRequest(request: JsonRpcRequest, options: McpOpti
     const params = (request.params ?? {}) as { name?: string }
     const args = readArgs(request.params)
     try {
-      const liveAction = ({ list_sessions: 'sessions', start_command: 'start', stop_session: 'stop', get_session_output: 'output' } as Record<string, AppCliRequest['action']>)[params.name ?? '']
+      const liveAction = ({ list_sessions: 'sessions', start_command: 'start', stop_session: 'stop', get_session_output: 'output', acquire_environment: 'acquire', get_environment_lease: 'lease-status', renew_environment_lease: 'renew', release_environment: 'release' } as Record<string, AppCliRequest['action']>)[params.name ?? '']
       if (liveAction) {
         if (liveAction === 'start' && (!stringArg(args, 'workspace') || !stringArg(args, 'command'))) throw new Error('workspace and command are required')
         if ((liveAction === 'stop' || liveAction === 'output') && !stringArg(args, 'sessionId')) throw new Error('sessionId is required')
-        const result = await callRunningApp({ action: liveAction, workspace: stringArg(args, 'workspace'), group: stringArg(args, 'group'),
+        if (['lease-status', 'renew', 'release'].includes(liveAction) && !stringArg(args, 'leaseId')) throw new Error('leaseId is required')
+        const result = await callRunningApp({ action: liveAction, leaseId: stringArg(args, 'leaseId') ?? process.env.WORKSPACE_MANAGER_LEASE, leaseMs: args.leaseMs as number | undefined, label: stringArg(args, 'label'), workspace: stringArg(args, 'workspace'), group: stringArg(args, 'group'),
           command: stringArg(args, 'command'), worktree: stringArg(args, 'worktree'), sessionId: stringArg(args, 'sessionId'),
           running: booleanArg(args, 'running'), limitKb: numberArg(args, 'limitKb') }, catalogOptions)
         return { jsonrpc: '2.0', id, result: textResult(result) }
@@ -252,12 +258,15 @@ export async function handleMcpRequest(request: JsonRpcRequest, options: McpOpti
           command,
           worktree: stringArg(args, 'worktree')
         })
-        const result = await executeRunPlan(resolved.plan, {
+        const result = booleanArg(args, 'dryRun') ? await executeRunPlan(resolved.plan, {
           preferredShell: catalog.preferredShell,
-    nodeCaCertificate: catalog.nodeCaCertificate,
+          nodeCaCertificate: catalog.nodeCaCertificate,
           timeoutMs,
-          dryRun: booleanArg(args, 'dryRun')
-        })
+          dryRun: true
+        }) : await callRunningApp({ action: 'run', workspace: resolved.workspace.id, command: resolved.command.id,
+          worktree: stringArg(args, 'worktree'), timeoutMs,
+          leaseId: stringArg(args, 'leaseId') ?? process.env.WORKSPACE_MANAGER_LEASE
+        }, { ...catalogOptions, timeoutMs: 0 }) as Awaited<ReturnType<typeof executeRunPlan>>
         return {
           jsonrpc: '2.0',
           id,
