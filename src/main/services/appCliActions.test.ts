@@ -138,6 +138,30 @@ describe('CLI and MCP running-app actions', () => {
     expect(realpathSync(session.worktreePath!)).toBe(realpathSync(tree))
     expect(ctx.store.getWorkspaceRecords()[0].gitWorktrees.map((entry) => realpathSync(entry.path))).toContain(realpathSync(tree))
   })
+  it('prefers the main checkout over worktrees registered on their own, and warns about ignored add flags', async () => {
+    const ctx = await setup()
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: ctx.root, stdio: 'ignore' })
+    git('init', '-q', '-b', 'main'); git('add', '.'); git('commit', '-q', '-m', 'init')
+    const older = join(ctx.dir, 'older-worktree')
+    git('worktree', 'add', '-q', '-b', 'agent/older', older)
+    // An older build registered this worktree as a workspace of its own.
+    await ctx.cli(['add', older, '--name', 'Older'])
+    await ctx.cli(['add', ctx.root, '--name', 'API'])
+    expect(ctx.store.getWorkspaceRecords()).toHaveLength(2)
+    const main = ctx.store.getWorkspaceRecords().find((entry) => entry.name === 'API')!
+
+    const tree = join(ctx.dir, 'new-worktree')
+    git('worktree', 'add', '-q', '-b', 'agent/new', tree)
+    const started = await ctx.cli(['start', '--cwd', tree, '--', 'node', '-v'])
+    expect(ctx.manager.list().find((entry) => entry.id === started.output.trim())!.workspaceId).toBe(main.id)
+
+    const added = await ctx.cli(['add', tree, '--name', 'Agent', '--group', 'Agents'])
+    expect(added.code).toBe(0)
+    expect(added.error).toContain('--name and --group were not applied')
+    expect(JSON.parse(added.output).id).toBe(main.id)
+    expect(ctx.store.getWorkspaceRecords()).toHaveLength(2)
+    expect(ctx.store.getGroups()).toHaveLength(0)
+  })
   it('omits live MCP tools and reports the specified message after the app stops', async () => {
     const ctx = await setup(); ctx.server.close()
     expect((await ctx.cli(['sessions'])).error).toBe('Workspace Manager is not running\n')

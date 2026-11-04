@@ -225,18 +225,22 @@ export async function listGitWorktrees(rootPath: string, options?: { enrich?: bo
 }
 
 /**
- * Find the checkout that contains a path, plus the .git dir that all of its
- * worktrees share. Returns null outside git.
+ * Find the checkout that contains a path, plus every checkout of its
+ * repository (main, linked, and bare; git lists the main one first).
+ * Returns null outside git.
  */
-export async function resolveGitCheckout(path: string): Promise<{ topLevel: string; commonDir: string } | null> {
+export async function resolveGitCheckout(path: string): Promise<{ topLevel: string; checkouts: string[] } | null> {
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], {
-      cwd: path,
-      windowsHide: true
-    })
-    const [topLevel, commonDir] = stdout.trim().split(/\r?\n/)
-    // Git before 2.31 echoes the unknown --path-format flag instead of a path.
-    return topLevel && commonDir && isAbsolute(topLevel) && isAbsolute(commonDir) ? { topLevel: normalize(topLevel), commonDir: normalize(commonDir) } : null
+    const [top, list] = await Promise.all([
+      execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: path, windowsHide: true }),
+      execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: path, windowsHide: true })
+    ])
+    const topLevel = top.stdout.trim()
+    if (!topLevel || !isAbsolute(topLevel)) return null
+    const checkouts = list.stdout.split(/\r?\n/)
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => normalize(line.slice('worktree '.length).trimEnd()))
+    return { topLevel: normalize(topLevel), checkouts }
   } catch {
     return null
   }

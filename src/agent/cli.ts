@@ -231,6 +231,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<num
         if (reservation) await callRunningApp({ action: 'release', leaseId: reservation.leaseId }, options)
         throw error
       }
+      const warnings = (result as { warnings?: unknown } | null)?.warnings
+      if (Array.isArray(warnings)) for (const warning of warnings) io.stderr(`warning: ${String(warning)}\n`)
       if (flagBoolean(parsed.flags, 'json')) printJson(io, reservation ? { ...(result as object), lease: reservation } : result)
       else if (parsed.command === 'start') io.stdout(`${(result as { sessionId: string }).sessionId}\n`)
       else if (parsed.command === 'sessions') {
