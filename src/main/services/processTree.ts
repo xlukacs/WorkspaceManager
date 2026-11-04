@@ -57,14 +57,57 @@ export function killChildProcess(child: ChildProcess, options?: { sync?: boolean
   killProcessTree(pid, options)
 }
 
-export function killPtyProcess(pty: KillablePty, options?: { sync?: boolean }) {
-  // Close the PTY first so Windows ConPTY can AttachConsole while the host is
-  // still alive. taskkill /T /F beforehand tears that console down and leaves
-  // node-pty worker handles that keep Electron from exiting.
+/** How long a Windows stop waits for taskkill before it closes the PTY anyway. */
+export const WINDOWS_PTY_CLOSE_TIMEOUT_MS = 3_000
+
+function closePty(pty: KillablePty) {
   try {
     pty.kill()
   } catch {
     // PTY may already be closed.
   }
+}
+
+/**
+ * Kill the tree first, then close the PTY. On Windows, node-pty's kill() calls
+ * ClosePseudoConsole on the main thread. Before Windows 11 24H2 that call
+ * blocks until every attached process has exited, so a dev server that
+ * shuts down gracefully freezes the whole app. Once the tree is gone,
+ * node-pty has released the console and kill() returns at once.
+ */
+function killWindowsPtyTree(pty: KillablePty) {
+  let closed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    clearTimeout(timer)
+    closePty(pty)
+  }
+  const timer = setTimeout(close, WINDOWS_PTY_CLOSE_TIMEOUT_MS)
+  const pid = pty.pid
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) {
+    close()
+    return
+  }
+
+  try {
+    const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    killer.once('exit', close)
+    killer.once('error', close)
+  } catch {
+    close()
+  }
+}
+
+export function killPtyProcess(pty: KillablePty, options?: { sync?: boolean }) {
+  if (platform() === 'win32' && !options?.sync) {
+    killWindowsPtyTree(pty)
+    return
+  }
+
+  // On quit, close the PTY first so Windows ConPTY can AttachConsole while the
+  // host is still alive. taskkill /T /F beforehand tears that console down and
+  // leaves node-pty worker handles that keep Electron from exiting.
+  closePty(pty)
   killProcessTree(pty.pid, options)
 }
