@@ -104,6 +104,7 @@ function ConsoleStatusBadge({ session }: { session: TerminalSession }) {
 
 export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
   const terminalRef = useRef<XTerminalHandle | null>(null)
+  const tabsRef = useRef<HTMLDivElement | null>(null)
   const renameInputRef = useRef<HTMLInputElement | null>(null)
   const renameCancelledRef = useRef(false)
   const editingTitleRef = useRef('')
@@ -256,6 +257,26 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
   }
 
   const activeSession = terminals.find((session) => session.id === activeTerminalId) ?? terminals[0] ?? null
+  const activeSessionId = activeSession?.id ?? null
+
+  // The tab strip hides its scrollbar, so turn vertical wheel motion into sideways scrolling.
+  useEffect(() => {
+    const strip = tabsRef.current
+    if (!strip) return
+    function onWheel(event: WheelEvent) {
+      if (!strip || event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      if (strip.scrollWidth <= strip.clientWidth) return
+      event.preventDefault()
+      strip.scrollLeft += event.deltaY
+    }
+    strip.addEventListener('wheel', onWheel, { passive: false })
+    return () => strip.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // Keep the active tab visible when hotkeys or new consoles change it.
+  useEffect(() => {
+    tabsRef.current?.querySelector('.terminal-tab-shell.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [activeSessionId])
   const activeSessionRunning = activeSession?.status === 'running'
   const pinnedCount = terminals.filter((session) => session.pinned).length
   const quickLaunch = commandList
@@ -309,7 +330,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
         </div>
       </div>
 
-      <div className="terminal-tabs">
+      <div className="terminal-tabs" ref={tabsRef}>
         {terminals.map((session) => {
           const branchLabel = sessionWorktreeLabel(workspace, session)
           const renaming = editingSessionId === session.id
