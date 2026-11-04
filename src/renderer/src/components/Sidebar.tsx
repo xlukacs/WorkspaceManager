@@ -77,6 +77,31 @@ export function Sidebar() {
     )
   }
 
+  const footer = (
+    <div className="sidebar-footer">
+      <button
+        type="button"
+        className="sidebar-footer-button"
+        onClick={() => importWorkspaces('folders')}
+        title="Add folders"
+        aria-label="Add folders"
+      >
+        <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" />
+        {!sidebarCollapsed && <span>Add folders</span>}
+      </button>
+      <button
+        type="button"
+        className="sidebar-footer-button"
+        title="Settings"
+        aria-label="Settings"
+        onClick={() => setSettingsOpen(true)}
+      >
+        <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
+        {!sidebarCollapsed && <span>Settings</span>}
+      </button>
+    </div>
+  )
+
   return (
     <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
       {sidebarCollapsed ? (
@@ -120,15 +145,7 @@ export function Sidebar() {
               </div>
             ))}
           </div>
-          <button
-            type="button"
-            className="mini-action mini-action-icon"
-            onClick={() => importWorkspaces('folders')}
-            title="Add folders"
-            aria-label="Add folders"
-          >
-            <FolderPlus size={18} strokeWidth={1.75} aria-hidden="true" />
-          </button>
+          {footer}
         </div>
       ) : (
         <Fragment>
@@ -151,22 +168,9 @@ export function Sidebar() {
             <SidebarTree />
           </div>
 
-          <div className="sidebar-footer">
-            <button
-              type="button"
-              className="mini-action mini-action-icon sidebar-import-action"
-              onClick={() => importWorkspaces('folders')}
-              title="Add folders"
-              aria-label="Add folders"
-            >
-              <FolderPlus size={18} strokeWidth={1.75} aria-hidden="true" />
-            </button>
-          </div>
+          {footer}
         </Fragment>
       )}
-      <button type="button" className="sidebar-settings-button" title="Settings" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
-        <Settings size={18} aria-hidden="true" />{!sidebarCollapsed && <span>Settings</span>}
-      </button>
     </aside>
   )
 }

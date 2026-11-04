@@ -66,9 +66,31 @@ export class AppStore {
 
   private pendingTerminals: TerminalSession[] | null = null
   private terminalsPersistTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * electron-store reads and parses the whole file on every get. The file holds
+   * every console's scrollback, so we read it once and serve gets from memory.
+   * Only this process writes the file; the CLI talks to the running app instead.
+   */
+  private cache: StoredState | null = null
 
   constructor() {
     this.migratedFromLegacy = this.migrate()
+  }
+
+  private state(): StoredState {
+    this.cache ??= this.store.store as StoredState
+    return this.cache
+  }
+
+  private read<K extends keyof StoredState>(key: K): StoredState[K] {
+    return this.state()[key]
+  }
+
+  private write<K extends keyof StoredState>(key: K, value: StoredState[K]) {
+    const next = { ...this.state(), [key]: value }
+    // Assigning the whole object skips electron-store's read before each set.
+    this.store.store = next
+    this.cache = next
   }
 
   readonly migratedFromLegacy: boolean
@@ -86,6 +108,7 @@ export class AppStore {
       if ((raw.version ?? 0) < 12 && existsSync(this.store.path) && !existsSync(backup)) {
         copyFileSync(this.store.path, backup, constants.COPYFILE_EXCL)
       }
+      this.cache = null
       this.store.store = {
         ...state,
         settings: {
@@ -110,15 +133,15 @@ export class AppStore {
   }
 
   getGroups(): GroupRecord[] {
-    return this.store.get('groups').map((group) => ({ ...group, color: group.color ?? null }))
+    return this.read('groups').map((group) => ({ ...group, color: group.color ?? null }))
   }
 
   setGroups(groups: GroupRecord[]) {
-    this.store.set('groups', groups.map((group) => ({ ...group, color: group.color ?? null })))
+    this.write('groups', groups.map((group) => ({ ...group, color: group.color ?? null })))
   }
 
   getWorkspaceRecords(): WorkspaceRecord[] {
-    return this.store.get('workspaces').map(normalizeWorkspaceRecord)
+    return this.read('workspaces').map(normalizeWorkspaceRecord)
       .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
   }
 
@@ -131,37 +154,37 @@ export class AppStore {
     const index = existing.findIndex((entry) => entry.id === workspace.id)
     if (index === -1) existing.push(workspace)
     else existing[index] = workspace
-    this.store.set('workspaces', existing.map(normalizeWorkspaceRecord))
+    this.write('workspaces', existing.map(normalizeWorkspaceRecord))
     return workspace
   }
 
   setWorkspaceRecords(workspaces: WorkspaceRecord[]) {
-    this.store.set('workspaces', workspaces.map(normalizeWorkspaceRecord))
+    this.write('workspaces', workspaces.map(normalizeWorkspaceRecord))
   }
 
   removeWorkspace(workspaceId: string) {
-    this.store.set('workspaces', this.getWorkspaceRecords().filter((workspace) => workspace.id !== workspaceId))
+    this.write('workspaces', this.getWorkspaceRecords().filter((workspace) => workspace.id !== workspaceId))
   }
 
   getUiState(): UiState {
-    return normalizeUiState(this.store.get('ui'), this.getGroups(), this.getWorkspaceRecords(), existsSync)
+    return normalizeUiState(this.read('ui'), this.getGroups(), this.getWorkspaceRecords(), existsSync)
   }
 
   setUiState(ui: UiState) {
-    this.store.set('ui', normalizeUiState(ui, this.getGroups(), this.getWorkspaceRecords(), existsSync))
+    this.write('ui', normalizeUiState(ui, this.getGroups(), this.getWorkspaceRecords(), existsSync))
   }
 
   getMigrationNotes() {
-    return this.store.get('migrationNotes') ?? []
+    return this.read('migrationNotes') ?? []
   }
 
   clearMigrationNotes() {
-    this.store.set('migrationNotes', [])
+    this.write('migrationNotes', [])
   }
 
   getTerminals() {
     if (this.pendingTerminals) return this.pendingTerminals
-    return this.normalizeTerminals(this.store.get('terminals'))
+    return this.normalizeTerminals(this.read('terminals'))
   }
 
   setTerminals(terminals: TerminalSession[]) {
@@ -177,7 +200,7 @@ export class AppStore {
     }
     if (!this.pendingTerminals) return
     const terminals = this.pendingTerminals
-    this.store.set('terminals', this.normalizeTerminals(terminals))
+    this.write('terminals', this.normalizeTerminals(terminals))
     this.pendingTerminals = null
   }
 
@@ -197,7 +220,7 @@ export class AppStore {
   }
 
   getSettings(): AppSettings {
-    return normalizeSettings({ ...this.store.get('settings'), preferredShell: this.getPreferredShell() })
+    return normalizeSettings({ ...this.read('settings'), preferredShell: this.getPreferredShell() })
   }
 
   updateSettings(patch: Partial<AppSettings>) {
@@ -205,17 +228,17 @@ export class AppStore {
     if (patch.nodeCaCertificate && settings.nodeCaCertificate && (!existsSync(settings.nodeCaCertificate) || !statSync(settings.nodeCaCertificate).isFile())) {
       throw new Error('Choose an existing CA certificate file.')
     }
-    this.store.set('settings', settings)
+    this.write('settings', settings)
     return this.getSettings()
   }
 
   getPreferredShell() {
-    return normalizePreferredShell(this.store.get('settings')?.preferredShell)
+    return normalizePreferredShell(this.read('settings')?.preferredShell)
   }
 
   getWindowBounds(): WindowBounds {
     return this.windowStore.get('bounds')
-      ?? this.store.get('settings')?.windowBounds
+      ?? this.read('settings')?.windowBounds
       ?? DEFAULT_WINDOW_BOUNDS
   }
 

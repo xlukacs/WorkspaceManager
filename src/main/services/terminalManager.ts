@@ -8,7 +8,7 @@ import type { AppSettings, CommandExecutionPlan, CommandRunPlan, ShellPreference
 import { createDebounced } from '@shared/debounce'
 import { appendTerminalBuffer } from '@shared/terminalBuffer'
 import { buildShellEnv, getCommandInvocation, toChildProcessArgs } from '@shared/shellEnv'
-import { killChildProcess, killPtyProcess, type KillablePty } from '@main/services/processTree'
+import { closePendingPtys, killChildProcess, killPtyProcess, type KillablePty } from '@main/services/processTree'
 
 type PtyProcess = KillablePty & {
   write: (data: string) => void
@@ -261,7 +261,8 @@ export class TerminalManager extends EventEmitter {
       })
 
       instance.onExit(({ exitCode }) => {
-        this.ptys.delete(sessionId)
+        // A restart may already have put a new PTY under this session.
+        if (this.ptys.get(sessionId) === instance) this.ptys.delete(sessionId)
         if (chained) this.handleChainStepExit(sessionId, exitCode, runToken)
         else this.finalizeExit(sessionId, exitCode, runToken)
       })
@@ -593,6 +594,8 @@ export class TerminalManager extends EventEmitter {
       this.manuallyStopped.add(sessionId)
       this.killSessionProcesses(sessionId, { sync: true })
     }
+    // Stops still waiting on taskkill would otherwise close their PTY after quit starts.
+    closePendingPtys()
     this.ptys.clear()
     this.children.clear()
     this.chainStates.clear()

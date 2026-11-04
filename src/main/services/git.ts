@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { join, normalize } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
 import type { GitSummary, GitWorktree } from '@shared/types'
 import {
   classifyWorktreeForCleanup,
@@ -221,6 +221,28 @@ export async function listGitWorktrees(rootPath: string, options?: { enrich?: bo
     return Promise.all(parsed.map((worktree) => enrichGitWorktree(worktree)))
   } catch {
     return []
+  }
+}
+
+/**
+ * Find the checkout that contains a path, plus every checkout of its
+ * repository (main, linked, and bare; git lists the main one first).
+ * Returns null outside git.
+ */
+export async function resolveGitCheckout(path: string): Promise<{ topLevel: string; checkouts: string[] } | null> {
+  try {
+    const [top, list] = await Promise.all([
+      execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: path, windowsHide: true }),
+      execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: path, windowsHide: true })
+    ])
+    const topLevel = top.stdout.trim()
+    if (!topLevel || !isAbsolute(topLevel)) return null
+    const checkouts = list.stdout.split(/\r?\n/)
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => normalize(line.slice('worktree '.length).trimEnd()))
+    return { topLevel: normalize(topLevel), checkouts }
+  } catch {
+    return null
   }
 }
 

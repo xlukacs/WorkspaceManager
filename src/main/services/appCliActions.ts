@@ -4,10 +4,11 @@ import { resolve } from 'node:path'
 import type { AppCliRequest } from '@shared/appCli'
 import type { AppStore } from '@main/store'
 import type { TerminalManager } from './terminalManager'
-import type { TerminalSession } from '@shared/types'
+import type { TerminalSession, WorkspaceRecord } from '@shared/types'
 import { findWorkspace, resolveRunnable, type AgentCatalog } from '@agent/catalog'
 import { normalizeComparePath } from '@shared/worktreeExecution'
-import { scanWorkspace } from './workspaceScan'
+import { refreshWorkspace, scanWorkspace } from './workspaceScan'
+import { resolveGitCheckout } from './git'
 import { WorkspaceLeases } from './workspaceLeases'
 import { DEFAULT_RUN_TIMEOUT_MS, executeRunPlan } from '@agent/runCommand'
 
@@ -22,6 +23,66 @@ export function createAppCliHandler(deps: {
   const { store, terminals } = deps
   const catalog = (): AgentCatalog => ({ storePath: '', groups: store.getGroups(), workspaces: store.getWorkspaceRecords(), terminals: terminals.list(), preferredShell: store.getPreferredShell() })
   const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined
+  /** `listed` is false when git found a worktree the stored list does not have yet. */
+  type CheckoutMatch = { workspace: WorkspaceRecord; checkout: string; listed: boolean }
+  /** The registered root or known worktree that contains the path, deepest first. */
+  const knownCheckout = (path: string): CheckoutMatch | undefined => {
+    const target = normalizeComparePath(path)
+    return store.getWorkspaceRecords().flatMap((workspace) => [workspace.rootPath, ...workspace.gitWorktrees.filter((tree) => !tree.isBare && !tree.isMissing).map((tree) => tree.path)]
+      .map((checkout) => ({ workspace, checkout, base: normalizeComparePath(checkout), listed: true })))
+      .filter(({ base }) => target === base || target.startsWith(base + '/'))
+      .sort((a, b) => b.base.length - a.base.length)
+      .map(({ workspace, checkout, listed }) => ({ workspace, checkout, listed }))[0]
+  }
+  /**
+   * An agent's new worktree is not in the stored worktree list yet. git lists
+   * every checkout of its repository, so the owner is the workspace rooted at
+   * one of them. A monorepo package workspace is rooted below its checkout,
+   * so it never claims sibling packages. Prefer the main checkout, which git
+   * lists first, over worktrees that were added as workspaces of their own.
+   */
+  const gitOwner = (git: { topLevel: string; checkouts: string[] }): CheckoutMatch | undefined => {
+    const rank = new Map(git.checkouts.map((checkout, index) => [normalizeComparePath(checkout), index]))
+    const workspace = store.getWorkspaceRecords()
+      .filter((entry) => rank.has(normalizeComparePath(entry.rootPath)))
+      .sort((a, b) => rank.get(normalizeComparePath(a.rootPath))! - rank.get(normalizeComparePath(b.rootPath))!)[0]
+    return workspace ? { workspace, checkout: git.topLevel, listed: false } : undefined
+  }
+  const checkoutFor = async (path: string): Promise<CheckoutMatch | undefined> => {
+    const known = knownCheckout(path)
+    if (known && normalizeComparePath(known.checkout) === normalizeComparePath(path)) return known
+    // A new worktree can sit inside a known checkout (for example <root>/.worktrees/x).
+    const git = await resolveGitCheckout(path)
+    if (!git || (known && normalizeComparePath(git.topLevel).length <= normalizeComparePath(known.checkout).length)) return known
+    return gitOwner(git) ?? known
+  }
+  /** git lists the main checkout (or the bare repository) first. */
+  const isMainCheckout = async (checkout: string) => {
+    const git = await resolveGitCheckout(checkout)
+    return git?.checkouts[0] !== undefined && normalizeComparePath(git.checkouts[0]) === normalizeComparePath(git.topLevel)
+  }
+  /** targets() and perform() both need the cwd's checkout, so look it up once per request. */
+  const cwdLookups = new WeakMap<AppCliRequest, Promise<CheckoutMatch | undefined>>()
+  const cwdCheckout = (request: AppCliRequest) => {
+    let lookup = cwdLookups.get(request)
+    if (!lookup) {
+      lookup = checkoutFor(realpathSync(resolve(request.cwd!)))
+      cwdLookups.set(request, lookup)
+    }
+    return lookup
+  }
+  /** Rescan so the new worktree shows up in the app's checkout bar. */
+  const refreshWorktrees = async (workspace: WorkspaceRecord) => {
+    try {
+      return await refreshWorkspace({
+        getWorkspaceRecords: () => store.getWorkspaceRecords(),
+        getWorkspaceRecord: (id) => store.getWorkspaceRecords().find((entry) => entry.id === id) ?? null,
+        upsertWorkspaceRecord: (record) => store.upsertWorkspaceRecord(record)
+      }, workspace.id) ?? workspace
+    } catch {
+      return workspace
+    }
+  }
   const group = (query: string) => {
     const matches = store.getGroups().filter((entry) => entry.id === query || entry.name.toLowerCase() === query.toLowerCase())
     if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous group: ${query}` : `Unknown group: ${query}`)
@@ -33,10 +94,24 @@ export function createAppCliHandler(deps: {
     store.setUiState({ ...ui, selectedWorkspaceId: workspaceId, selectedGroupId: workspace.groupId ?? 'all',
       selectedWorktreeByWorkspace: session?.worktreePath ? { ...ui.selectedWorktreeByWorkspace, [workspaceId]: session.worktreePath } : ui.selectedWorktreeByWorkspace })
   }
-  const add = async (path: string, request: AppCliRequest) => {
+  /** Pass `owner` when the caller already looked up the containing checkout. */
+  const add = async (path: string, request: AppCliRequest, owner?: CheckoutMatch | null) => {
     const rootPath = realpathSync(resolve(path))
     if (!statSync(rootPath).isDirectory()) throw new Error('Workspace path must be a directory.')
     const existing = store.getWorkspaceRecords().find((entry) => normalizeComparePath(entry.rootPath) === normalizeComparePath(rootPath))
+    if (!existing) {
+      // A linked worktree of a registered repository belongs to that workspace.
+      // The main checkout still gets its own, even if a worktree was added first.
+      if (owner === undefined) owner = await checkoutFor(rootPath)
+      if (owner && normalizeComparePath(owner.checkout) !== normalizeComparePath(owner.workspace.rootPath)
+        && !await isMainCheckout(owner.checkout)) {
+        const workspace = await refreshWorktrees(owner.workspace)
+        const ignored = (['name', 'group'] as const).filter((flag) => text(request[flag]))
+        if (ignored.length === 0) return workspace
+        const flags = ignored.map((flag) => `--${flag}`).join(' and ')
+        return { ...workspace, warnings: [`${rootPath} is a worktree of "${workspace.name}", so it joined that workspace and ${flags} ${ignored.length > 1 ? 'were' : 'was'} not applied.`] }
+      }
+    }
     let groupId = existing?.groupId ?? null
     const groupName = text(request.group)
     if (groupName) {
@@ -70,7 +145,7 @@ export function createAppCliHandler(deps: {
     if (request.action === 'add') {
       const path = text(request.cwd)
       if (!path) throw new Error('A workspace path is required.')
-      const workspace = await add(path, request)
+      const workspace = await add(path, request, (await cwdCheckout(request)) ?? null)
       select(workspace.id); deps.changed()
       return workspace
     }
@@ -90,13 +165,11 @@ export function createAppCliHandler(deps: {
         if (!Array.isArray(argv) || !argv.length || argv.some((arg) => typeof arg !== 'string')) throw new Error('Pass a command after --.')
         const cwd = realpathSync(resolve(request.cwd!))
         if (!statSync(cwd).isDirectory()) throw new Error('cwd must be a directory.')
-        const matches = store.getWorkspaceRecords().flatMap((workspace) => [workspace.rootPath, ...workspace.gitWorktrees.filter((tree) => !tree.isBare && !tree.isMissing).map((tree) => tree.path)]
-          .map((checkout) => ({ workspace, checkout })).filter(({ checkout }) => {
-            const base = normalizeComparePath(checkout), target = normalizeComparePath(cwd)
-            return target === base || target.startsWith(base + '/')
-          })).sort((a, b) => b.checkout.length - a.checkout.length)
-        const match = matches[0]
-        const workspace = match?.workspace ?? await add(cwd, request)
+        let match = await cwdCheckout(request)
+        // A lease wait can outlast the workspace that matched.
+        if (match && !store.getWorkspaceRecords().some((entry) => entry.id === match!.workspace.id)) match = await checkoutFor(cwd)
+        const workspace = !match ? await add(cwd, request, null)
+          : match.listed ? match.workspace : await refreshWorktrees(match.workspace)
         const quote = (value: string) => process.platform === 'win32' && store.getPreferredShell() === 'cmd'
           ? `"${value.replaceAll('"', '""')}"` : `'${value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''")}'`
         const shellLine = argv.length === 1 ? argv[0] : `${process.platform === 'win32' && store.getPreferredShell() !== 'cmd' ? '& ' : ''}${argv.map(quote).join(' ')}`
@@ -161,31 +234,26 @@ export function createAppCliHandler(deps: {
     await terminals.stopGroup([...new Set([...ids, ...currentIds])])
     deps.changed()
   })
-  const cwdWorkspace = (path: string) => {
-    const target = normalizeComparePath(realpathSync(resolve(path)))
-    return store.getWorkspaceRecords().flatMap((workspace) => [workspace.rootPath, ...workspace.gitWorktrees.filter((tree) => !tree.isBare && !tree.isMissing).map((tree) => tree.path)]
-      .map((checkout) => ({ workspace, checkout: normalizeComparePath(checkout) })))
-      .filter(({ checkout }) => target === checkout || target.startsWith(checkout + '/'))
-      .sort((a, b) => b.checkout.length - a.checkout.length)[0]?.workspace
-  }
   const scopeForGroup = (query: string) => `group:${group(query).id}`
-  const targets = (request: AppCliRequest): string[] => {
-    if (text(request.workspace) && text(request.group)) throw new Error('Choose either --workspace or --group.')
-    if (request.action === 'add') {
-      if (!text(request.cwd)) throw new Error('A workspace path is required.')
-      const existing = store.getWorkspaceRecords().find((workspace) => normalizeComparePath(workspace.rootPath) === normalizeComparePath(realpathSync(resolve(request.cwd!))))
-      const parent = cwdWorkspace(request.cwd!)
-      const scopes = existing ? [scopeOf(existing)] : parent ? [scopeOf(parent)] : []
-      if (text(request.group)) {
-        const matches = store.getGroups().filter((entry) => entry.id === request.group || entry.name.toLowerCase() === request.group!.toLowerCase())
-        if (matches.length > 1) throw new Error(`Ambiguous group: ${request.group}`)
-        scopes.push(matches[0] ? `group:${matches[0].id}` : `new-group:${request.group!.toLowerCase()}`)
-      }
-      return scopes.length ? scopes : [`path:${normalizeComparePath(realpathSync(resolve(request.cwd!)))}`]
+  const addTargets = async (request: AppCliRequest): Promise<string[]> => {
+    if (!text(request.cwd)) throw new Error('A workspace path is required.')
+    const path = realpathSync(resolve(request.cwd!))
+    const existing = store.getWorkspaceRecords().find((workspace) => normalizeComparePath(workspace.rootPath) === normalizeComparePath(path))
+    const parent = (await cwdCheckout(request))?.workspace
+    const scopes = existing ? [scopeOf(existing)] : parent ? [scopeOf(parent)] : []
+    if (text(request.group)) {
+      const matches = store.getGroups().filter((entry) => entry.id === request.group || entry.name.toLowerCase() === request.group!.toLowerCase())
+      if (matches.length > 1) throw new Error(`Ambiguous group: ${request.group}`)
+      scopes.push(matches[0] ? `group:${matches[0].id}` : `new-group:${request.group!.toLowerCase()}`)
     }
+    return scopes.length ? scopes : [`path:${normalizeComparePath(path)}`]
+  }
+  const targets = async (request: AppCliRequest): Promise<string[]> => {
+    if (text(request.workspace) && text(request.group)) throw new Error('Choose either --workspace or --group.')
+    if (request.action === 'add') return addTargets(request)
     if (request.action === 'start' && text(request.cwd)) {
-      const workspace = cwdWorkspace(request.cwd!)
-      return workspace ? [scopeOf(workspace)] : targets({ ...request, action: 'add' })
+      const workspace = (await cwdCheckout(request))?.workspace
+      return workspace ? [scopeOf(workspace)] : await addTargets(request)
     }
     if (request.action === 'start' || request.action === 'run') {
       const resolved = resolveRunnable(catalog(), { project: request.workspace, command: request.command ?? '', worktree: request.worktree })
@@ -219,7 +287,7 @@ export function createAppCliHandler(deps: {
     }
     if (['ping', 'sessions', 'output'].includes(request.action)) return perform(request, new AbortController().signal)
     if (!['add', 'start', 'run', 'stop', 'pause', 'resume', 'kill-all', 'focus'].includes(request.action)) throw new Error(`Unknown app action: ${request.action}`)
-    return leases.control(targets(request), request.leaseId, (signal) => perform(request,
+    return leases.control(await targets(request), request.leaseId, (signal) => perform(request,
       request.action === 'run' && clientSignal ? AbortSignal.any([signal, clientSignal]) : signal))
   }
   return Object.assign(handle, { dispose: () => leases.dispose() })

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAppCliHandler, type AppCliStore } from './appCliActions'
@@ -99,6 +100,67 @@ describe('CLI and MCP running-app actions', () => {
     await ctx.handle({ action: 'start', cwd: unknown, argv: ['echo registered'] })
     expect(ctx.store.getWorkspaceRecords()).toHaveLength(2)
     await expect(ctx.handle({ action: 'stop', workspace: 'demo', group: 'other' })).rejects.toThrow('either')
+  })
+  it('keeps a new worktree of a registered repository in that repository\'s workspace', async () => {
+    const ctx = await setup()
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: ctx.root, stdio: 'ignore' })
+    git('init', '-q', '-b', 'main'); git('add', '.'); git('commit', '-q', '-m', 'init')
+    await ctx.cli(['add', ctx.root, '--name', 'API'])
+    // The agent creates the worktree after the workspace was scanned.
+    const tree = join(ctx.dir, 'agent-worktree')
+    git('worktree', 'add', '-q', '-b', 'agent/feature', tree)
+
+    const result = await ctx.cli(['start', '--cwd', tree, '--', 'node', '-v'])
+    expect(result.code).toBe(0)
+    const workspaces = ctx.store.getWorkspaceRecords()
+    expect(workspaces).toHaveLength(1)
+    expect(workspaces[0].name).toBe('API')
+    expect(workspaces[0].gitWorktrees.map((entry) => realpathSync(entry.path))).toContain(realpathSync(tree))
+    const session = ctx.manager.list().find((entry) => entry.id === result.output.trim())!
+    expect(session.workspaceId).toBe(workspaces[0].id)
+    expect(realpathSync(session.worktreePath!)).toBe(realpathSync(tree))
+
+    const added = await ctx.handle({ action: 'add', cwd: tree }) as { id: string }
+    expect(added.id).toBe(workspaces[0].id)
+    expect(ctx.store.getWorkspaceRecords()).toHaveLength(1)
+  })
+  it('attributes a new worktree nested under the registered root to that worktree', async () => {
+    const ctx = await setup()
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: ctx.root, stdio: 'ignore' })
+    git('init', '-q', '-b', 'main'); writeFileSync(join(ctx.root, '.gitignore'), '.worktrees/\n'); git('add', '.'); git('commit', '-q', '-m', 'init')
+    await ctx.cli(['add', ctx.root, '--name', 'API'])
+    const tree = join(ctx.root, '.worktrees', 'feature')
+    git('worktree', 'add', '-q', '-b', 'agent/nested', tree)
+
+    const result = await ctx.cli(['start', '--cwd', tree, '--', 'node', '-v'])
+    expect(result.code).toBe(0)
+    const session = ctx.manager.list().find((entry) => entry.id === result.output.trim())!
+    expect(realpathSync(session.worktreePath!)).toBe(realpathSync(tree))
+    expect(ctx.store.getWorkspaceRecords()[0].gitWorktrees.map((entry) => realpathSync(entry.path))).toContain(realpathSync(tree))
+  })
+  it('prefers the main checkout over worktrees registered on their own, and warns about ignored add flags', async () => {
+    const ctx = await setup()
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: ctx.root, stdio: 'ignore' })
+    git('init', '-q', '-b', 'main'); git('add', '.'); git('commit', '-q', '-m', 'init')
+    const older = join(ctx.dir, 'older-worktree')
+    git('worktree', 'add', '-q', '-b', 'agent/older', older)
+    // An older build registered this worktree as a workspace of its own.
+    await ctx.cli(['add', older, '--name', 'Older'])
+    await ctx.cli(['add', ctx.root, '--name', 'API'])
+    expect(ctx.store.getWorkspaceRecords()).toHaveLength(2)
+    const main = ctx.store.getWorkspaceRecords().find((entry) => entry.name === 'API')!
+
+    const tree = join(ctx.dir, 'new-worktree')
+    git('worktree', 'add', '-q', '-b', 'agent/new', tree)
+    const started = await ctx.cli(['start', '--cwd', tree, '--', 'node', '-v'])
+    expect(ctx.manager.list().find((entry) => entry.id === started.output.trim())!.workspaceId).toBe(main.id)
+
+    const added = await ctx.cli(['add', tree, '--name', 'Agent', '--group', 'Agents'])
+    expect(added.code).toBe(0)
+    expect(added.error).toContain('--name and --group were not applied')
+    expect(JSON.parse(added.output).id).toBe(main.id)
+    expect(ctx.store.getWorkspaceRecords()).toHaveLength(2)
+    expect(ctx.store.getGroups()).toHaveLength(0)
   })
   it('omits live MCP tools and reports the specified message after the app stops', async () => {
     const ctx = await setup(); ctx.server.close()
