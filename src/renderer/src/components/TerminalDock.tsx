@@ -274,8 +274,15 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
   }, [])
 
   // Keep the active tab visible when hotkeys or new consoles change it.
+  // Scroll only the strip; scrollIntoView would also scroll the page to the dock.
   useEffect(() => {
-    tabsRef.current?.querySelector('.terminal-tab-shell.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    const strip = tabsRef.current
+    const tab = strip?.querySelector<HTMLElement>('.terminal-tab-shell.active')
+    if (!strip || !tab) return
+    const bounds = strip.getBoundingClientRect()
+    const target = tab.getBoundingClientRect()
+    if (target.left < bounds.left) strip.scrollLeft -= bounds.left - target.left
+    else if (target.right > bounds.right) strip.scrollLeft += target.right - bounds.right
   }, [activeSessionId])
   const activeSessionRunning = activeSession?.status === 'running'
   const pinnedCount = terminals.filter((session) => session.pinned).length

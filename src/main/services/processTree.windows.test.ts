@@ -13,7 +13,7 @@ vi.mock('node:child_process', async (load) => ({
   }
 }))
 
-const { killPtyProcess, WINDOWS_PTY_CLOSE_TIMEOUT_MS } = await import('@main/services/processTree')
+const { closePendingPtys, killPtyProcess, WINDOWS_PTY_CLOSE_TIMEOUT_MS } = await import('@main/services/processTree')
 
 describe('killPtyProcess on Windows', () => {
   beforeEach(() => {
@@ -39,6 +39,17 @@ describe('killPtyProcess on Windows', () => {
   it('closes the PTY anyway when taskkill never finishes', () => {
     const kill = vi.fn()
     killPtyProcess({ pid: 4242, kill })
+    vi.advanceTimersByTime(WINDOWS_PTY_CLOSE_TIMEOUT_MS)
+    expect(kill).toHaveBeenCalledOnce()
+  })
+
+  it('closes PTYs still waiting on taskkill when the app quits', () => {
+    const kill = vi.fn()
+    killPtyProcess({ pid: 4242, kill })
+    closePendingPtys()
+    expect(kill).toHaveBeenCalledOnce()
+
+    spawned[0].process.emit('exit', 0)
     vi.advanceTimersByTime(WINDOWS_PTY_CLOSE_TIMEOUT_MS)
     expect(kill).toHaveBeenCalledOnce()
   })

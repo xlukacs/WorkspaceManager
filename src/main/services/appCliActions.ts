@@ -7,7 +7,7 @@ import type { TerminalManager } from './terminalManager'
 import type { TerminalSession, WorkspaceRecord } from '@shared/types'
 import { findWorkspace, resolveRunnable, type AgentCatalog } from '@agent/catalog'
 import { normalizeComparePath } from '@shared/worktreeExecution'
-import { scanWorkspace } from './workspaceScan'
+import { refreshWorkspace, scanWorkspace } from './workspaceScan'
 import { resolveGitCheckout } from './git'
 import { WorkspaceLeases } from './workspaceLeases'
 import { DEFAULT_RUN_TIMEOUT_MS, executeRunPlan } from '@agent/runCommand'
@@ -23,45 +23,53 @@ export function createAppCliHandler(deps: {
   const { store, terminals } = deps
   const catalog = (): AgentCatalog => ({ storePath: '', groups: store.getGroups(), workspaces: store.getWorkspaceRecords(), terminals: terminals.list(), preferredShell: store.getPreferredShell() })
   const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined
-  type CheckoutMatch = { workspace: WorkspaceRecord; checkout: string }
+  /** `listed` is false when git found a worktree the stored list does not have yet. */
+  type CheckoutMatch = { workspace: WorkspaceRecord; checkout: string; listed: boolean }
   /** The registered root or known worktree that contains the path, deepest first. */
   const knownCheckout = (path: string): CheckoutMatch | undefined => {
     const target = normalizeComparePath(path)
     return store.getWorkspaceRecords().flatMap((workspace) => [workspace.rootPath, ...workspace.gitWorktrees.filter((tree) => !tree.isBare && !tree.isMissing).map((tree) => tree.path)]
-      .map((checkout) => ({ workspace, checkout })))
-      .filter(({ checkout }) => {
-        const base = normalizeComparePath(checkout)
-        return target === base || target.startsWith(base + '/')
-      })
-      .sort((a, b) => normalizeComparePath(b.checkout).length - normalizeComparePath(a.checkout).length)[0]
+      .map((checkout) => ({ workspace, checkout, base: normalizeComparePath(checkout), listed: true })))
+      .filter(({ base }) => target === base || target.startsWith(base + '/'))
+      .sort((a, b) => b.base.length - a.base.length)
+      .map(({ workspace, checkout, listed }) => ({ workspace, checkout, listed }))[0]
   }
   /**
    * An agent's new worktree is not in the stored worktree list yet. Match it to
-   * its repository through the .git dir that all worktrees share.
+   * its repository through the .git dir that all worktrees share. Only
+   * workspaces rooted at their checkout's top level own its worktrees, so a
+   * monorepo package workspace does not swallow its sibling packages.
    */
-  const gitCheckout = async (path: string): Promise<CheckoutMatch | undefined> => {
-    const git = await resolveGitCheckout(path)
-    if (!git) return undefined
+  const gitOwner = async (git: { topLevel: string; commonDir: string }): Promise<CheckoutMatch | undefined> => {
     const common = normalizeComparePath(git.commonDir)
     const workspaces = store.getWorkspaceRecords()
     let workspace = workspaces.find((entry) => normalizeComparePath(join(entry.rootPath, '.git')) === common)
     if (!workspace) {
       const checkouts = await Promise.all(workspaces.map((entry) => resolveGitCheckout(entry.rootPath)))
-      workspace = workspaces.find((_, index) => {
-        const commonDir = checkouts[index]?.commonDir
-        return commonDir !== undefined && normalizeComparePath(commonDir) === common
+      workspace = workspaces.find((entry, index) => {
+        const checkout = checkouts[index]
+        return checkout !== null && normalizeComparePath(checkout.commonDir) === common
+          && normalizeComparePath(checkout.topLevel) === normalizeComparePath(entry.rootPath)
       })
     }
-    return workspace ? { workspace, checkout: git.topLevel } : undefined
+    return workspace ? { workspace, checkout: git.topLevel, listed: false } : undefined
   }
-  const checkoutFor = async (path: string) => knownCheckout(path) ?? await gitCheckout(path)
+  const checkoutFor = async (path: string): Promise<CheckoutMatch | undefined> => {
+    const known = knownCheckout(path)
+    if (known && normalizeComparePath(known.checkout) === normalizeComparePath(path)) return known
+    // A new worktree can sit inside a known checkout (for example <root>/.worktrees/x).
+    const git = await resolveGitCheckout(path)
+    if (!git || (known && normalizeComparePath(git.topLevel).length <= normalizeComparePath(known.checkout).length)) return known
+    return await gitOwner(git) ?? known
+  }
   /** Rescan so the new worktree shows up in the app's checkout bar. */
   const refreshWorktrees = async (workspace: WorkspaceRecord) => {
     try {
-      const scanned = await scanWorkspace(workspace.rootPath, workspace.groupId, workspace)
-      const latest = store.getWorkspaceRecords().find((entry) => entry.id === workspace.id) ?? workspace
-      return store.upsertWorkspaceRecord({ ...latest, projects: scanned.projects, gitSummary: scanned.gitSummary,
-        gitWorktrees: scanned.gitWorktrees, lastScanAt: scanned.lastScanAt })
+      return await refreshWorkspace({
+        getWorkspaceRecords: () => store.getWorkspaceRecords(),
+        getWorkspaceRecord: (id) => store.getWorkspaceRecords().find((entry) => entry.id === id) ?? null,
+        upsertWorkspaceRecord: (record) => store.upsertWorkspaceRecord(record)
+      }, workspace.id) ?? workspace
     } catch {
       return workspace
     }
@@ -77,13 +85,14 @@ export function createAppCliHandler(deps: {
     store.setUiState({ ...ui, selectedWorkspaceId: workspaceId, selectedGroupId: workspace.groupId ?? 'all',
       selectedWorktreeByWorkspace: session?.worktreePath ? { ...ui.selectedWorktreeByWorkspace, [workspaceId]: session.worktreePath } : ui.selectedWorktreeByWorkspace })
   }
-  const add = async (path: string, request: AppCliRequest) => {
+  /** Pass `owner` when the caller already looked up the containing checkout. */
+  const add = async (path: string, request: AppCliRequest, owner?: CheckoutMatch | null) => {
     const rootPath = realpathSync(resolve(path))
     if (!statSync(rootPath).isDirectory()) throw new Error('Workspace path must be a directory.')
     const existing = store.getWorkspaceRecords().find((entry) => normalizeComparePath(entry.rootPath) === normalizeComparePath(rootPath))
     if (!existing) {
       // A worktree of a registered repository belongs to that workspace.
-      const owner = await checkoutFor(rootPath)
+      if (owner === undefined) owner = await checkoutFor(rootPath)
       if (owner && normalizeComparePath(owner.checkout) !== normalizeComparePath(owner.workspace.rootPath)) {
         return refreshWorktrees(owner.workspace)
       }
@@ -141,11 +150,9 @@ export function createAppCliHandler(deps: {
         if (!Array.isArray(argv) || !argv.length || argv.some((arg) => typeof arg !== 'string')) throw new Error('Pass a command after --.')
         const cwd = realpathSync(resolve(request.cwd!))
         if (!statSync(cwd).isDirectory()) throw new Error('cwd must be a directory.')
-        const known = knownCheckout(cwd)
-        const match = known ?? await gitCheckout(cwd)
-        const workspace = match
-          ? known ? match.workspace : await refreshWorktrees(match.workspace)
-          : await add(cwd, request)
+        const match = await checkoutFor(cwd)
+        const workspace = !match ? await add(cwd, request, null)
+          : match.listed ? match.workspace : await refreshWorktrees(match.workspace)
         const quote = (value: string) => process.platform === 'win32' && store.getPreferredShell() === 'cmd'
           ? `"${value.replaceAll('"', '""')}"` : `'${value.replaceAll("'", process.platform === 'win32' ? "''" : "'\\''")}'`
         const shellLine = argv.length === 1 ? argv[0] : `${process.platform === 'win32' && store.getPreferredShell() !== 'cmd' ? '& ' : ''}${argv.map(quote).join(' ')}`

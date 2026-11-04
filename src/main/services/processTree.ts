@@ -60,6 +60,14 @@ export function killChildProcess(child: ChildProcess, options?: { sync?: boolean
 /** How long a Windows stop waits for taskkill before it closes the PTY anyway. */
 export const WINDOWS_PTY_CLOSE_TIMEOUT_MS = 3_000
 
+/** Windows PTYs whose tree is still being killed. Quit closes them at once. */
+const pendingPtyCloses = new Set<() => void>()
+
+/** Close every PTY a Windows stop has not closed yet. Call this before quitting. */
+export function closePendingPtys() {
+  for (const close of [...pendingPtyCloses]) close()
+}
+
 function closePty(pty: KillablePty) {
   try {
     pty.kill()
@@ -81,9 +89,11 @@ function killWindowsPtyTree(pty: KillablePty) {
     if (closed) return
     closed = true
     clearTimeout(timer)
+    pendingPtyCloses.delete(close)
     closePty(pty)
   }
   const timer = setTimeout(close, WINDOWS_PTY_CLOSE_TIMEOUT_MS)
+  pendingPtyCloses.add(close)
   const pid = pty.pid
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) {
     close()

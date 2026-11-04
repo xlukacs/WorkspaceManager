@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { join, normalize } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
 import type { GitSummary, GitWorktree } from '@shared/types'
 import {
   classifyWorktreeForCleanup,
@@ -235,7 +235,8 @@ export async function resolveGitCheckout(path: string): Promise<{ topLevel: stri
       windowsHide: true
     })
     const [topLevel, commonDir] = stdout.trim().split(/\r?\n/)
-    return topLevel && commonDir ? { topLevel: normalize(topLevel), commonDir: normalize(commonDir) } : null
+    // Git before 2.31 echoes the unknown --path-format flag instead of a path.
+    return topLevel && commonDir && isAbsolute(topLevel) && isAbsolute(commonDir) ? { topLevel: normalize(topLevel), commonDir: normalize(commonDir) } : null
   } catch {
     return null
   }

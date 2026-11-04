@@ -124,6 +124,20 @@ describe('CLI and MCP running-app actions', () => {
     expect(added.id).toBe(workspaces[0].id)
     expect(ctx.store.getWorkspaceRecords()).toHaveLength(1)
   })
+  it('attributes a new worktree nested under the registered root to that worktree', async () => {
+    const ctx = await setup()
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd: ctx.root, stdio: 'ignore' })
+    git('init', '-q', '-b', 'main'); writeFileSync(join(ctx.root, '.gitignore'), '.worktrees/\n'); git('add', '.'); git('commit', '-q', '-m', 'init')
+    await ctx.cli(['add', ctx.root, '--name', 'API'])
+    const tree = join(ctx.root, '.worktrees', 'feature')
+    git('worktree', 'add', '-q', '-b', 'agent/nested', tree)
+
+    const result = await ctx.cli(['start', '--cwd', tree, '--', 'node', '-v'])
+    expect(result.code).toBe(0)
+    const session = ctx.manager.list().find((entry) => entry.id === result.output.trim())!
+    expect(realpathSync(session.worktreePath!)).toBe(realpathSync(tree))
+    expect(ctx.store.getWorkspaceRecords()[0].gitWorktrees.map((entry) => realpathSync(entry.path))).toContain(realpathSync(tree))
+  })
   it('omits live MCP tools and reports the specified message after the app stops', async () => {
     const ctx = await setup(); ctx.server.close()
     expect((await ctx.cli(['sessions'])).error).toBe('Workspace Manager is not running\n')
