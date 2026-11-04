@@ -224,6 +224,23 @@ export async function listGitWorktrees(rootPath: string, options?: { enrich?: bo
   }
 }
 
+/**
+ * Find the checkout that contains a path, plus the .git dir that all of its
+ * worktrees share. Returns null outside git.
+ */
+export async function resolveGitCheckout(path: string): Promise<{ topLevel: string; commonDir: string } | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], {
+      cwd: path,
+      windowsHide: true
+    })
+    const [topLevel, commonDir] = stdout.trim().split(/\r?\n/)
+    return topLevel && commonDir ? { topLevel: normalize(topLevel), commonDir: normalize(commonDir) } : null
+  } catch {
+    return null
+  }
+}
+
 export function defaultGitWorktreesRoot(workspaceRootPath: string) {
   return join(normalize(workspaceRootPath), '.worktrees')
 }
