@@ -9,7 +9,10 @@ import { TerminalDock } from '@renderer/components/TerminalDock'
 import { useAppStore } from '@renderer/store/useAppStore'
 
 vi.mock('@renderer/components/XTerminal', () => ({
-  XTerminal: React.forwardRef(() => <div data-testid="xterm" />)
+  XTerminal: React.forwardRef((props: { suspendInput?: boolean }, ref) => {
+    React.useImperativeHandle(ref, () => ({ copy() {}, openSearch() {}, blur() {} }))
+    return <div data-testid="xterm" data-suspend-input={props.suspendInput ? 'true' : 'false'} />
+  })
 }))
 
 const initialState = useAppStore.getState()
@@ -170,5 +173,33 @@ describe('TerminalDock console tab rename', () => {
 
     expect(screen.getByRole('button', { name: 'dev console' })).toBeTruthy()
     expect(renameTerminal).not.toHaveBeenCalled()
+  })
+
+  it('keeps the rename field editable while a running console emits output', () => {
+    const renameTerminal = vi.fn(async () => undefined)
+    useAppStore.setState({
+      ...initialState,
+      terminals: [terminal('dev', { buffer: 'boot\n' })],
+      activeTerminalId: 'dev',
+      renameTerminal
+    }, true)
+
+    render(<TerminalDock workspace={workspace} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(screen.getByTestId('xterm').getAttribute('data-suspend-input')).toBe('true')
+    const input = screen.getByLabelText('Rename dev') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'front' } })
+
+    act(() => {
+      useAppStore.setState({
+        terminals: [terminal('dev', { buffer: 'boot\ncompiled successfully\n' })]
+      })
+    })
+
+    expect((screen.getByLabelText('Rename dev') as HTMLInputElement).value).toBe('front')
+    fireEvent.change(screen.getByLabelText('Rename dev'), { target: { value: 'frontend' } })
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(renameTerminal).toHaveBeenCalledWith('dev', 'frontend')
   })
 })

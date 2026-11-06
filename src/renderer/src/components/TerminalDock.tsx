@@ -1,5 +1,5 @@
 import { visibleConsoleSessions } from '@shared/navigation'
-import React, { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { Clipboard, Maximize2, Minimize2, OctagonX, Pencil, Search, Star, Trash2 } from 'lucide-react'
 import type { WorkspaceRecord, TerminalSession } from '@shared/types'
 import {
@@ -84,6 +84,24 @@ function sessionWorktreeLabel(workspace: WorkspaceRecord, session: TerminalSessi
   return worktree ? worktreeLabel(worktree) : null
 }
 
+function consoleTabIdentity(session: TerminalSession) {
+  return [
+    session.id,
+    session.workspaceId,
+    session.title,
+    session.status,
+    session.pinned,
+    session.worktreePath ?? '',
+    session.exitCode ?? '',
+    session.cwd,
+    session.shellLine
+  ].join('\u0001')
+}
+
+function isXtermFocusTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest('.xterm'))
+}
+
 function ConsoleStatusBadge({ session }: { session: TerminalSession }) {
   const meta = CONSOLE_STATUS_META[session.status]
   const exitDetail = session.exitCode !== null && session.status !== 'running' && session.status !== 'stopped'
@@ -107,14 +125,17 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
   const tabsRef = useRef<HTMLDivElement | null>(null)
   const renameInputRef = useRef<HTMLInputElement | null>(null)
   const renameCancelledRef = useRef(false)
-  const editingTitleRef = useRef('')
-  const allTerminals = useAppStore((state) => state.terminals)
   const consoleTabFilter = useAppStore((state) => state.consoleTabFilter)
   const toggleConsoleTabFilter = useAppStore((state) => state.toggleConsoleTabFilter)
   const selectedWorktreePath = useAppStore((state) => state.selectedWorktreeByWorkspace[workspace.id])
+  const consoleTabKey = useAppStore((state) =>
+    visibleConsoleSessions(state.terminals, workspace, consoleTabFilter, selectedWorktreePath)
+      .map(consoleTabIdentity)
+      .join('\n')
+  )
   const terminals = useMemo(
-    () => visibleConsoleSessions(allTerminals, workspace, consoleTabFilter, selectedWorktreePath),
-    [allTerminals, workspace, consoleTabFilter, selectedWorktreePath]
+    () => visibleConsoleSessions(useAppStore.getState().terminals, workspace, consoleTabFilter, selectedWorktreePath),
+    [consoleTabKey, workspace, consoleTabFilter, selectedWorktreePath]
   )
   const workspaceRunningCount = useAppStore(
     (state) => state.terminals.reduce((count, session) => count + (session.status === 'running' ? 1 : 0), 0)
@@ -137,8 +158,6 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
   const showWorktreeLabels = consoleTabFilter === 'all'
   const [contextMenu, setContextMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
-  const [editingTitle, setEditingTitle] = useState('')
-  editingTitleRef.current = editingTitle
   const contextSession = contextMenu
     ? terminals.find((session) => session.id === contextMenu.sessionId) ?? null
     : null
@@ -148,28 +167,24 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
     setContextMenu(null)
     setActiveTerminal(session.id)
     setEditingSessionId(session.id)
-    setEditingTitle(session.title)
-    editingTitleRef.current = session.title
     terminalRef.current?.blur()
   }
 
   function cancelRename() {
     renameCancelledRef.current = true
     setEditingSessionId(null)
-    setEditingTitle('')
   }
 
   async function commitRename(session: TerminalSession) {
     if (renameCancelledRef.current) return
     renameCancelledRef.current = true
-    const nextTitle = editingTitleRef.current.trim()
+    const nextTitle = renameInputRef.current?.value.trim() ?? ''
     setEditingSessionId(null)
-    setEditingTitle('')
     if (!nextTitle || nextTitle === session.title) return
     await renameTerminal(session.id, nextTitle)
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!editingSessionId) {
       delete document.body.dataset.renamingConsole
       return
@@ -177,7 +192,11 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
 
     document.body.dataset.renamingConsole = 'true'
     terminalRef.current?.blur()
+    renameInputRef.current?.focus({ preventScroll: true })
+    renameInputRef.current?.select()
     const frame = window.requestAnimationFrame(() => {
+      if (document.activeElement === renameInputRef.current) return
+      terminalRef.current?.blur()
       renameInputRef.current?.focus({ preventScroll: true })
       renameInputRef.current?.select()
     })
@@ -187,6 +206,13 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
       if (target && renameInputRef.current?.contains(target)) return
       const session = useAppStore.getState().terminals.find((item) => item.id === editingSessionId)
       if (session) void commitRename(session)
+    }
+
+    function onFocusIn(event: FocusEvent) {
+      if (!isXtermFocusTarget(event.target)) return
+      event.stopPropagation()
+      terminalRef.current?.blur()
+      renameInputRef.current?.focus({ preventScroll: true })
     }
 
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -205,15 +231,15 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
     }
 
     document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('focusin', onFocusIn, true)
     window.addEventListener('keydown', onKeyDown, true)
     return () => {
       window.cancelAnimationFrame(frame)
       document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('focusin', onFocusIn, true)
       window.removeEventListener('keydown', onKeyDown, true)
       delete document.body.dataset.renamingConsole
     }
-    // Focus and listeners must not reset when terminal output updates.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingSessionId])
 
   function handleTabContextMenu(event: MouseEvent<HTMLElement>, session: TerminalSession) {
@@ -371,13 +397,13 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                   }}
                 >
                   <input
+                    key={session.id}
                     ref={renameInputRef}
                     autoFocus
                     autoComplete="off"
                     spellCheck={false}
                     aria-label={`Rename ${session.title}`}
-                    value={editingTitle}
-                    onChange={(event) => setEditingTitle(event.target.value)}
+                    defaultValue={session.title}
                     onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
                       event.stopPropagation()
                       if (event.key === 'Escape') {
@@ -519,7 +545,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
             </div>
           </div>
           <div className="terminal-frame">
-            <XTerminal ref={terminalRef} session={activeSession} />
+            <XTerminal ref={terminalRef} sessionId={activeSession.id} suspendInput={Boolean(editingSessionId)} />
           </div>
         </>
       ) : (
