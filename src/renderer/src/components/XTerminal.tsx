@@ -1,11 +1,10 @@
 import { isWorkspaceNavigationShortcut } from '@renderer/hooks/workspaceShortcuts'
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchResultChangeEvent } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, X } from 'lucide-react'
-import type { TerminalSession } from '@shared/types'
 import { containsDomRendererLeak, appendTerminalBuffer, diffTerminalBuffer, sanitizeTerminalBuffer } from '@shared/terminalBuffer'
 import { createDebounced } from '@shared/debounce'
 import { useAppStore } from '@renderer/store/useAppStore'
@@ -59,13 +58,26 @@ function writeTerminal(terminal: Terminal, data: string, follow: boolean) {
   })
 }
 
-export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSession }>(function XTerminal(
-  { session },
+function setXtermInputLocked(terminal: Terminal | null | undefined, locked: boolean) {
+  if (!terminal) return
+  terminal.options.disableStdin = locked
+  const textarea = terminal.textarea
+  if (!textarea) return
+  textarea.disabled = locked
+  textarea.tabIndex = locked ? -1 : 0
+  if (locked) terminal.blur()
+}
+
+export const XTerminal = memo(forwardRef<XTerminalHandle, { sessionId: string; suspendInput?: boolean }>(function XTerminal(
+  { sessionId, suspendInput = false },
   ref
 ) {
   const consoleFullscreen = useAppStore((state) => state.consoleFullscreen)
+  const sessionBuffer = useAppStore((state) => state.terminals.find((item) => item.id === sessionId)?.buffer ?? '')
   const containerRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  const suspendInputRef = useRef(suspendInput)
+  suspendInputRef.current = suspendInput
   const fitRef = useRef<FitAddon | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -186,7 +198,7 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
       const size = `${terminal.cols}x${terminal.rows}`
       if (size === sentSize) return
       sentSize = size
-      void window.workspaceApi.terminals.resize(session.id, terminal.cols, terminal.rows)
+      void window.workspaceApi.terminals.resize(sessionId, terminal.cols, terminal.rows)
     }, PTY_RESIZE_DEBOUNCE_MS)
     const resizeDisposable = terminal.onResize(() => sendSize())
 
@@ -200,17 +212,27 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
     const syncCursorBlink = () => {
       terminal.options.cursorBlink = document.activeElement === terminal.textarea
     }
-    terminal.textarea?.addEventListener('focus', syncCursorBlink)
+    const onTerminalFocus = () => {
+      if (suspendInputRef.current) {
+        setXtermInputLocked(terminal, true)
+        return
+      }
+      syncCursorBlink()
+    }
+    terminal.textarea?.addEventListener('focus', onTerminalFocus)
     terminal.textarea?.addEventListener('blur', syncCursorBlink)
+    setXtermInputLocked(terminal, suspendInputRef.current)
 
-    const initialBuffer = sanitizeTerminalBuffer(session.buffer)
+    const initialBuffer = sanitizeTerminalBuffer(
+      useAppStore.getState().terminals.find((item) => item.id === sessionId)?.buffer ?? ''
+    )
     terminal.write(initialBuffer)
     terminal.onData((data) => {
       if (containsDomRendererLeak(data)) return
-      window.workspaceApi.terminals.write(session.id, data)
+      window.workspaceApi.terminals.write(sessionId, data)
     })
     terminal.attachCustomKeyEventHandler((event) => {
-      if (document.body.dataset.renamingConsole === 'true') return false
+      if (suspendInputRef.current || document.body.dataset.renamingConsole === 'true') return false
       const active = document.activeElement
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
         if (!active.classList.contains('xterm-helper-textarea')) return false
@@ -270,7 +292,7 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
       if (fitFrame !== 0) cancelAnimationFrame(fitFrame)
       sendSize.cancel()
       resizeDisposable.dispose()
-      terminal.textarea?.removeEventListener('focus', syncCursorBlink)
+      terminal.textarea?.removeEventListener('focus', onTerminalFocus)
       terminal.textarea?.removeEventListener('blur', syncCursorBlink)
       container.removeEventListener('contextmenu', onContextMenu)
       searchResultDisposable.dispose()
@@ -280,20 +302,24 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
       fitRef.current = null
       searchRef.current = null
     }
-  }, [copyText, session.id])
+  }, [copyText, sessionId])
+
+  useLayoutEffect(() => {
+    setXtermInputLocked(terminalRef.current, suspendInput)
+  }, [suspendInput])
 
   useEffect(() => {
     if (typeof window.workspaceApi === 'undefined') return
 
     return window.workspaceApi.terminals.subscribeOutput((event) => {
-      if (event.sessionId !== session.id) return
+      if (event.sessionId !== sessionId) return
       if (containsDomRendererLeak(event.chunk)) return
       const terminal = terminalRef.current
       if (!terminal) return
       lastBufferRef.current = appendTerminalBuffer(lastBufferRef.current, event.chunk)
       writeTerminal(terminal, event.chunk, false)
     })
-  }, [session.id])
+  }, [sessionId])
 
   useEffect(() => {
     const onFindShortcut = (event: KeyboardEvent) => {
@@ -328,7 +354,7 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
     const terminal = terminalRef.current
     if (!terminal) return
 
-    const buffer = sanitizeTerminalBuffer(session.buffer)
+    const buffer = sanitizeTerminalBuffer(sessionBuffer)
     if (buffer === lastBufferRef.current) return
     if (lastBufferRef.current.startsWith(buffer)) return
 
@@ -348,7 +374,7 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
 
     terminal.reset()
     writeTerminal(terminal, sync.chunk, true)
-  }, [session.buffer])
+  }, [sessionBuffer])
 
   useEffect(() => {
     const fitAddon = fitRef.current
@@ -408,4 +434,4 @@ export const XTerminal = memo(forwardRef<XTerminalHandle, { session: TerminalSes
       )}
     </>
   )
-}), (prev, next) => prev.session.id === next.session.id && prev.session.buffer === next.session.buffer)
+}), (prev, next) => prev.sessionId === next.sessionId && prev.suspendInput === next.suspendInput)
