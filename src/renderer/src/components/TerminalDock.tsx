@@ -1,6 +1,6 @@
 import { visibleConsoleSessions } from '@shared/navigation'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { Clipboard, Maximize2, Minimize2, OctagonX, Pencil, Search, Star, Trash2 } from 'lucide-react'
+import { Clipboard, Maximize2, Minimize2, OctagonX, Pencil, Pin, Play, Search, Square, Trash2, X } from 'lucide-react'
 import type { WorkspaceRecord, TerminalSession } from '@shared/types'
 import {
   listWorkspaceWorktrees,
@@ -13,61 +13,6 @@ import { useAppStore } from '@renderer/store/useAppStore'
 
 const dockIconProps = { size: 15, strokeWidth: 1.75, 'aria-hidden': true as const }
 const menuIconProps = { size: 15, strokeWidth: 1.75, 'aria-hidden': true as const }
-
-function PinIcon() {
-  return (
-    <svg className="pin-glyph" aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.176 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81H7.03a1 1 0 0 0 .951-.69l1.07-3.292Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function RemoveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M4 4l8 8M12 4 4 12"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function PlayIcon() {
-  return (
-    <svg className="toolbar-glyph play-glyph" aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M6.3 4.86c0-1.04 1.14-1.67 2.02-1.1l7.62 4.89c.81.52.81 1.7 0 2.22l-7.62 4.89c-.88.57-2.02-.06-2.02-1.1V4.86Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function StopIcon() {
-  return (
-    <svg className="toolbar-glyph" aria-hidden="true" viewBox="0 0 16 16">
-      <rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.35" fill="currentColor" />
-    </svg>
-  )
-}
-
-function ClearIcon() {
-  return (
-    <svg className="toolbar-glyph" aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M6.5 2.75a.75.75 0 0 1 .73-.6h1.54a.75.75 0 0 1 .73.6l.12.6h2.13a.75.75 0 0 1 0 1.5h-.33l-.47 7.14a1.5 1.5 0 0 1-1.5 1.4H6.55a1.5 1.5 0 0 1-1.5-1.4l-.47-7.14h-.33a.75.75 0 0 1 0-1.5h2.13l.12-.6Zm1.5 2.8a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Zm-1.95.6a.6.6 0 1 1 1.2 0v4.3a.6.6 0 0 1-1.2 0v-4.3Zm4.75-.6a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
 
 const CONSOLE_STATUS_META: Record<TerminalSession['status'], { label: string; tone: string }> = {
   running: { label: 'Running', tone: 'running' },
@@ -263,7 +208,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
       {
         id: 'pin',
         label: session.pinned ? 'Unpin' : 'Pin',
-        icon: <Star {...menuIconProps} />,
+        icon: <Pin {...menuIconProps} fill={session.pinned ? 'currentColor' : 'none'} />,
         onSelect: () => {
           setActiveTerminal(session.id)
           void togglePinTerminal(session.id)
@@ -326,10 +271,19 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
           <span>{terminals.length} tabs{pinnedCount > 0 ? `, ${pinnedCount} pinned` : ''}</span>
         </div>
         <div className="terminal-dock-head-actions">
-          <button type="button" className="terminal-dock-head-button"
-            aria-label="Show consoles from this worktree only" aria-pressed={consoleTabFilter === 'worktree'}
-            onClick={toggleConsoleTabFilter}>
-            {consoleTabFilter === 'all' ? 'All worktrees' : 'This worktree'}
+          <button
+            type="button"
+            role="switch"
+            className={`terminal-dock-head-button terminal-worktree-switch${consoleTabFilter === 'all' ? ' is-on' : ''}`}
+            aria-label="Show consoles from all worktrees"
+            aria-checked={consoleTabFilter === 'all'}
+            title={consoleTabFilter === 'all' ? 'Showing consoles from all worktrees' : 'Showing consoles from this worktree'}
+            onClick={toggleConsoleTabFilter}
+          >
+            <span>All worktrees</span>
+            <span className="toggle-track" aria-hidden="true">
+              <span className="toggle-thumb" />
+            </span>
           </button>
           <button
             type="button"
@@ -442,7 +396,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                   void togglePinTerminal(session.id)
                 }}
               >
-                <PinIcon />
+                <Pin {...dockIconProps} fill={session.pinned ? 'currentColor' : 'none'} />
               </button>
               <button
                 type="button"
@@ -454,7 +408,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                   void removeTerminal(session.id)
                 }}
               >
-                <RemoveIcon />
+                <X {...dockIconProps} />
               </button>
             </div>
             )}
@@ -519,7 +473,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                 title="Clear console"
                 onClick={() => clearTerminal(activeSession.id)}
               >
-                <ClearIcon />
+                <Trash2 className="toolbar-glyph" {...dockIconProps} />
               </button>
               {activeSessionRunning ? (
                 <button
@@ -529,7 +483,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                   title="Stop console"
                   onClick={() => stopTerminal(activeSession.id)}
                 >
-                  <StopIcon />
+                  <Square className="toolbar-glyph" fill="currentColor" {...dockIconProps} />
                 </button>
               ) : (
                 <button
@@ -539,7 +493,7 @@ export function TerminalDock({ workspace }: { workspace: WorkspaceRecord }) {
                   title="Restart console"
                   onClick={() => restartTerminal(activeSession.id)}
                 >
-                  <PlayIcon />
+                  <Play className="toolbar-glyph" fill="currentColor" {...dockIconProps} />
                 </button>
               )}
             </div>

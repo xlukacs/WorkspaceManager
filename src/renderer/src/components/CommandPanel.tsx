@@ -1,117 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ListOrdered,
+  Pin,
+  Play,
+  Plus,
+  Trash2,
+  X
+} from 'lucide-react'
 import type { CommandDescriptor, CommandGroup, WorkspaceRecord } from '@shared/types'
 import { useAppStore } from '@renderer/store/useAppStore'
 import { CommandGroupHeader, PrerequisiteSelect, commandKindLabel, groupMatchesSearch } from '@renderer/components/commandGroups'
 
 const COMMAND_SEARCH_DEBOUNCE_MS = 250
-
-function PinIcon() {
-  return (
-    <svg className="pin-glyph" aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.176 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81H7.03a1 1 0 0 0 .951-.69l1.07-3.292Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function PlayIcon() {
-  return (
-    <svg className="play-glyph" aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M6.3 4.86c0-1.04 1.14-1.67 2.02-1.1l7.62 4.89c.81.52.81 1.7 0 2.22l-7.62 4.89c-.88.57-2.02-.06-2.02-1.1V4.86Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function StepsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M4.5 5.5h5M4.5 10h11M4.5 14.5h7"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.8"
-      />
-      <circle cx="13.5" cy="5.5" r="1.6" fill="currentColor" />
-      <circle cx="12.5" cy="14.5" r="1.6" fill="currentColor" />
-    </svg>
-  )
-}
-
-function ArrowUpIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="m4.25 9.5 3.75-3.75 3.75 3.75" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
-    </svg>
-  )
-}
-
-function ArrowDownIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="m4.25 6.5 3.75 3.75 3.75-3.75" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
-    </svg>
-  )
-}
-
-function RemoveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M4 4l8 8M12 4 4 12"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function AddIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M8 3.2v9.6M3.2 8h9.6"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function CheckIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="m3.4 8.2 3.1 3.1 6.1-6.4"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function ClearIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M6.5 2.75a.75.75 0 0 1 .73-.6h1.54a.75.75 0 0 1 .73.6l.12.6h2.13a.75.75 0 0 1 0 1.5h-.33l-.47 7.14a1.5 1.5 0 0 1-1.5 1.4H6.55a1.5 1.5 0 0 1-1.5-1.4l-.47-7.14h-.33a.75.75 0 0 1 0-1.5h2.13l.12-.6Zm1.5 2.8a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Zm-1.95.6a.6.6 0 1 1 1.2 0v4.3a.6.6 0 0 1-1.2 0v-4.3Zm4.75-.6a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
+const iconProps = { strokeWidth: 1.75, 'aria-hidden': true as const }
 
 function prerequisiteSummary(command: CommandDescriptor) {
   if (command.prerequisiteTitles.length === 0) return null
@@ -239,7 +143,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
         <div className="command-row">
           <div className="command-copy">
             <strong title={command.title}>
-              {command.title}
+              <span>{command.title}</span>
               {kind && <small className="command-kind-badge">{kind}</small>}
             </strong>
             <span title={preview}>
@@ -259,7 +163,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
               title={command.favorite ? 'Unpin command' : 'Pin command'}
               onClick={() => toggleFavoriteCommand(workspace.id, command.id)}
             >
-              <PinIcon />
+              <Pin fill={command.favorite ? 'currentColor' : 'none'} {...iconProps} />
             </button>
             <button
               type="button"
@@ -276,7 +180,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                 startEditing(command)
               }}
             >
-              <StepsIcon />
+              <ListOrdered {...iconProps} />
             </button>
             <button
               type="button"
@@ -285,7 +189,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
               title="Run command"
               onClick={() => runCommand(command.id)}
             >
-              <PlayIcon />
+              <Play fill="currentColor" {...iconProps} />
             </button>
           </div>
         </div>
@@ -358,7 +262,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                   setPendingAddId('')
                 }}
               >
-                <RemoveIcon />
+                <X {...iconProps} />
               </button>
             </div>
 
@@ -391,7 +295,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             })
                           }}
                         >
-                          <ArrowUpIcon />
+                          <ArrowUp {...iconProps} />
                         </button>
                         <button
                           type="button"
@@ -406,7 +310,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             })
                           }}
                         >
-                          <ArrowDownIcon />
+                          <ArrowDown {...iconProps} />
                         </button>
                         <button
                           type="button"
@@ -416,7 +320,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             setDraftPrerequisiteIds((current) => current.filter((item) => item !== prerequisiteId))
                           }}
                         >
-                          <RemoveIcon />
+                          <X {...iconProps} />
                         </button>
                       </div>
                     </div>
@@ -444,7 +348,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                     setPendingAddId('')
                   }}
                 >
-                  <AddIcon />
+                  <Plus {...iconProps} />
                 </button>
               </div>
 
@@ -456,7 +360,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                   title="Save steps"
                   onClick={() => void submitChain(editingCommand.id)}
                 >
-                  <CheckIcon />
+                  <Check {...iconProps} />
                 </button>
                 {draftPrerequisiteIds.length > 0 && (
                   <button
@@ -468,7 +372,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                       setDraftPrerequisiteIds([])
                     }}
                   >
-                    <ClearIcon />
+                    <Trash2 {...iconProps} />
                   </button>
                 )}
                 <button
@@ -482,7 +386,7 @@ export function CommandPanel({ workspace }: { workspace: WorkspaceRecord }) {
                     setPendingAddId('')
                   }}
                 >
-                  <RemoveIcon />
+                  <X {...iconProps} />
                 </button>
               </div>
             </div>

@@ -1,104 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ListOrdered,
+  Play,
+  Plus,
+  Trash2,
+  X
+} from 'lucide-react'
 import type { DockerCommandDescriptor, WorkspaceRecord } from '@shared/types'
 import { useAppStore } from '@renderer/store/useAppStore'
 import { PrerequisiteSelect } from '@renderer/components/commandGroups'
 
-function PlayIcon() {
-  return (
-    <svg className="play-glyph" aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M6.3 4.86c0-1.04 1.14-1.67 2.02-1.1l7.62 4.89c.81.52.81 1.7 0 2.22l-7.62 4.89c-.88.57-2.02-.06-2.02-1.1V4.86Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function StepsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 20 20">
-      <path
-        d="M4.5 5.5h5M4.5 10h11M4.5 14.5h7"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.8"
-      />
-      <circle cx="13.5" cy="5.5" r="1.6" fill="currentColor" />
-      <circle cx="12.5" cy="14.5" r="1.6" fill="currentColor" />
-    </svg>
-  )
-}
-
-function ArrowUpIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="m4.25 9.5 3.75-3.75 3.75 3.75" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
-    </svg>
-  )
-}
-
-function ArrowDownIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="m4.25 6.5 3.75 3.75 3.75-3.75" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
-    </svg>
-  )
-}
-
-function RemoveIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M4 4l8 8M12 4 4 12"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function AddIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M8 3.2v9.6M3.2 8h9.6"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function CheckIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="m3.4 8.2 3.1 3.1 6.1-6.4"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  )
-}
-
-function ClearIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M6.5 2.75a.75.75 0 0 1 .73-.6h1.54a.75.75 0 0 1 .73.6l.12.6h2.13a.75.75 0 0 1 0 1.5h-.33l-.47 7.14a1.5 1.5 0 0 1-1.5 1.4H6.55a1.5 1.5 0 0 1-1.5-1.4l-.47-7.14h-.33a.75.75 0 0 1 0-1.5h2.13l.12-.6Zm1.5 2.8a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Zm-1.95.6a.6.6 0 1 1 1.2 0v4.3a.6.6 0 0 1-1.2 0v-4.3Zm4.75-.6a.6.6 0 0 0-.6.6v4.3a.6.6 0 1 0 1.2 0v-4.3a.6.6 0 0 0-.6-.6Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
+const iconProps = { strokeWidth: 1.75, 'aria-hidden': true as const }
 
 function prerequisiteSummary(command: DockerCommandDescriptor) {
   if (command.prerequisiteTitles.length === 0) return null
@@ -209,7 +124,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                 startEditing(command)
               }}
             >
-              <StepsIcon />
+              <ListOrdered {...iconProps} />
             </button>
             <button
               type="button"
@@ -218,7 +133,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
               title={command.shellLine}
               onClick={() => runDockerCommand(command.id)}
             >
-              <PlayIcon />
+              <Play fill="currentColor" {...iconProps} />
             </button>
           </div>
         </div>
@@ -231,7 +146,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
       <div className={`command-panel-content ${editingCommand ? 'dialog-open' : ''}`}>
         {dockerList.groups.map((group) => (
           <div key={group.key} className="command-group">
-            <p className="group-label">{group.title}</p>
+            <p className="command-group-title">{group.title}</p>
             <div className="command-grid">
               {group.commands.map((command) => renderCommand(command))}
             </div>
@@ -265,7 +180,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                   setPendingAddId('')
                 }}
               >
-                <RemoveIcon />
+                <X {...iconProps} />
               </button>
             </div>
 
@@ -298,7 +213,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             })
                           }}
                         >
-                          <ArrowUpIcon />
+                          <ArrowUp {...iconProps} />
                         </button>
                         <button
                           type="button"
@@ -313,7 +228,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             })
                           }}
                         >
-                          <ArrowDownIcon />
+                          <ArrowDown {...iconProps} />
                         </button>
                         <button
                           type="button"
@@ -323,7 +238,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                             setDraftPrerequisiteIds((current) => current.filter((item) => item !== prerequisiteId))
                           }}
                         >
-                          <RemoveIcon />
+                          <X {...iconProps} />
                         </button>
                       </div>
                     </div>
@@ -351,7 +266,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                     setPendingAddId('')
                   }}
                 >
-                  <AddIcon />
+                  <Plus {...iconProps} />
                 </button>
               </div>
 
@@ -363,7 +278,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                   title="Save steps"
                   onClick={() => void submitChain(editingCommand.id)}
                 >
-                  <CheckIcon />
+                  <Check {...iconProps} />
                 </button>
                 {draftPrerequisiteIds.length > 0 && (
                   <button
@@ -373,7 +288,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                     title="Clear steps"
                     onClick={() => setDraftPrerequisiteIds([])}
                   >
-                    <ClearIcon />
+                    <Trash2 {...iconProps} />
                   </button>
                 )}
                 <button
@@ -387,7 +302,7 @@ export function DockerPanel({ workspace }: { workspace: WorkspaceRecord }) {
                     setPendingAddId('')
                   }}
                 >
-                  <RemoveIcon />
+                  <X {...iconProps} />
                 </button>
               </div>
             </div>
