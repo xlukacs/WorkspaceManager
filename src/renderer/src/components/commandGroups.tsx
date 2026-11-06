@@ -28,7 +28,7 @@ export function groupMatchesSearch(group: CommandGroup, query: string) {
 export function CommandGroupHeader({ group }: { group: CommandGroup }) {
   return (
     <div className="command-group-head">
-      <p className="group-label">{group.title}</p>
+      <p className="command-group-title">{group.title}</p>
       {group.projectId !== undefined && (
         <span className="command-group-path" title={group.relativePath || undefined}>
           {projectPathLabel(group.relativePath)}

@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { EditorTarget, PinnedEndpoint, WorkspaceRecord, RunAction } from '@shared/types'
+import {
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  Folder,
+  FolderOpen,
+  GitBranch,
+  Pin,
+  Play,
+  RefreshCw,
+  SlidersHorizontal,
+  SquareTerminal,
+  Trash2,
+  X
+} from 'lucide-react'
+import type { EditorTarget, OpenTarget, PinnedEndpoint, WorkspaceRecord, RunAction } from '@shared/types'
 import { selectWorktreesForCleanup } from '@shared/worktreeCleanup'
 import { WorktreeCheckoutBar } from '@renderer/components/WorktreeCheckoutBar'
 import { readWorktreeCleanupSettings } from '@renderer/components/WorktreeCleanupPanel'
@@ -9,49 +24,7 @@ import { DockerPanel } from '@renderer/components/DockerPanel'
 import { TerminalDock } from '@renderer/components/TerminalDock'
 import { useAppStore } from '@renderer/store/useAppStore'
 
-function OpenIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M3 5.1 8 2.5l5 2.6v5.8L8 13.5l-5-2.6V5.1Zm5-1.3L5 5.3 8 6.9l3-1.6L8 3.8Zm-3.8 2.5v3.9l3.1 1.6V7.9L4.2 6.3Zm4.5 5.5 3.1-1.6V6.3L8.7 7.9v3.9Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function RunIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="M5 3.25v9.5L12.5 8 5 3.25Z" fill="currentColor" />
-    </svg>
-  )
-}
-
-function ConfigureIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M3 4.25h5.5M11.5 4.25H13M3 8h1.5M7.5 8H13M3 11.75h5.5M11.5 11.75H13"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.4"
-      />
-      <circle cx="10" cy="4.25" r="1.5" fill="currentColor" />
-      <circle cx="6" cy="8" r="1.5" fill="currentColor" />
-      <circle cx="10" cy="11.75" r="1.5" fill="currentColor" />
-    </svg>
-  )
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="M4.2 6.2 8 10l3.8-3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
-    </svg>
-  )
-}
+const iconProps = { strokeWidth: 1.75, 'aria-hidden': true as const }
 
 function CursorIcon() {
   return (
@@ -69,53 +42,11 @@ function VsCodeIcon() {
   )
 }
 
-function ExplorerIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path d="M2.2 4.1h4l1.1 1.2h6.5v6.3a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2V4.1Zm1.4 2.4v4.9h8.8V6.5H3.6Z" fill="currentColor" />
-    </svg>
-  )
-}
-
-function TerminalIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M2.2 3.4h11.6v9.2H2.2V3.4Zm1.4 1.4V11.2h8.8V4.8H3.6Zm1.1 1.1 1.7 1.7-1.7 1.7 1 1 2.7-2.7-2.7-2.7-1 1Zm4.6 4.1h2.3V8.9H9.3V10Z"
-        fill="currentColor"
-      />
-    </svg>
-  )
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M9.2 2.8h4v4M13 3 7.7 8.3M7 4.2H4.6A1.6 1.6 0 0 0 3 5.8v5.6A1.6 1.6 0 0 0 4.6 13h5.6a1.6 1.6 0 0 0 1.6-1.6V9"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.45"
-      />
-    </svg>
-  )
-}
-
-function PinIcon({ filled = false }: { filled?: boolean }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="m5.1 2.6 5.3 5.3m-3.8-4 3.3-1.3 3.4 3.4-1.3 3.3-2.1.5-2.9 2.9-.7-.7 2.9-2.9-.5-2.1-3.4-3.4L6.6 4Zm2 7.5-4.4 4.4"
-        fill={filled ? 'currentColor' : 'none'}
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.3"
-      />
-    </svg>
-  )
+function OpenTargetIcon({ target }: { target: OpenTarget }) {
+  if (target === 'cursor') return <CursorIcon />
+  if (target === 'vscode') return <VsCodeIcon />
+  if (target === 'terminal') return <SquareTerminal {...iconProps} />
+  return <FolderOpen {...iconProps} />
 }
 
 interface WorkspaceEndpoint {
@@ -231,21 +162,6 @@ function normalizeCustomEndpoint(rawValue: string): PinnedEndpoint | null {
   }
 }
 
-function GitWorktreeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16">
-      <path
-        d="M6 2.75v3.4a2.25 2.25 0 1 0 2.25 2.25H9.5v6.1a2.25 2.25 0 1 0 2.25 2.25V3.25"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  )
-}
-
 function LinksPanel({ workspace }: { workspace: WorkspaceRecord }) {
   const saveLink = useAppStore((state) => state.saveLink)
   const deleteLink = useAppStore((state) => state.deleteLink)
@@ -262,16 +178,28 @@ function LinksPanel({ workspace }: { workspace: WorkspaceRecord }) {
       <div className="link-list">
         {workspace.quickLinks.map((link) => (
           <article key={link.id} className="link-row">
-            <div>
-              <strong>{link.label}</strong>
-              <span>{link.url}</span>
+            <div className="link-copy">
+              <strong title={link.label}>{link.label}</strong>
+              <span title={link.url}>{link.url}</span>
             </div>
             <div className="command-actions">
-              <button type="button" onClick={() => window.workspaceApi.system.openExternal(link.url)}>
-                Open
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Open ${link.label}`}
+                title="Open"
+                onClick={() => window.workspaceApi.system.openExternal(link.url)}
+              >
+                <ExternalLink {...iconProps} />
               </button>
-              <button type="button" onClick={() => deleteLink(workspace.id, link.id)}>
-                Remove
+              <button
+                type="button"
+                className="icon-button danger"
+                aria-label={`Remove ${link.label}`}
+                title="Remove"
+                onClick={() => deleteLink(workspace.id, link.id)}
+              >
+                <Trash2 {...iconProps} />
               </button>
             </div>
           </article>
@@ -521,7 +449,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                 title={`Open in ${{ cursor: 'Cursor', vscode: 'VS Code', folder: 'folder', terminal: 'terminal' }[editorTarget]}`}
                 onClick={openDefaultTarget}
               >
-                <OpenIcon />
+                <OpenTargetIcon target={editorTarget} />
                 <span>Open</span>
               </button>
               <button
@@ -534,7 +462,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                   setOpenMenuOpen((value) => !value)
                 }}
               >
-                <ChevronDownIcon />
+                <ChevronDown {...iconProps} />
               </button>
             </div>
             {openMenuOpen && (
@@ -556,11 +484,11 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                   <span>VS Code</span>
                 </button>
                 <button type="button" onClick={handleOpenExplorer}>
-                  <ExplorerIcon />
+                  <Folder {...iconProps} />
                   <span>Explorer</span>
                 </button>
                 <button type="button" onClick={handleOpenTerminal}>
-                  <TerminalIcon />
+                  <SquareTerminal {...iconProps} />
                   <span>Terminal</span>
                 </button>
               </div>
@@ -575,7 +503,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                 title={defaultRunAction ? `Run ${defaultRunAction.description}` : 'No run actions configured'}
                 onClick={runDefaultAction}
               >
-                <RunIcon />
+                <Play fill="currentColor" {...iconProps} />
                 <span>Run</span>
               </button>
               <button
@@ -588,7 +516,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                   setRunMenuOpen((value) => !value)
                 }}
               >
-                <ChevronDownIcon />
+                <ChevronDown {...iconProps} />
               </button>
             </div>
             {runMenuOpen && (
@@ -605,7 +533,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                       className={defaultRunAction?.id === action.id ? 'active' : ''}
                       onClick={() => handleSelectRunAction(action)}
                     >
-                      <RunIcon />
+                      <Play fill="currentColor" {...iconProps} />
                       <span className="workspace-run-dropdown-copy">
                         <strong>{action.description}</strong>
                         <span>{action.command}</span>
@@ -615,7 +543,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                 </div>
                 <div className="workspace-run-configure">
                   <button type="button" onClick={openRunConfiguration}>
-                    <ConfigureIcon />
+                    <SlidersHorizontal {...iconProps} />
                     <span>Edit configurations…</span>
                   </button>
                 </div>
@@ -629,7 +557,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
               title={idleWorktreeCount > 0 ? `Manage git worktrees, ${idleWorktreeCount} idle` : 'Manage git worktrees'}
               onClick={() => setWorktreesDialogOpen(true)}
             >
-              <GitWorktreeIcon />
+              <GitBranch {...iconProps} />
               <span>Worktrees{worktreeCount > 0 ? ` (${worktreeCount})` : ''}</span>
               {idleWorktreeCount > 0 && (
                 <span className="workspace-worktrees-idle">
@@ -638,11 +566,23 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
               )}
             </button>
           )}
-          <button type="button" onClick={() => window.workspaceApi.system.copyText(workspace.rootPath)}>
-            Copy path
+          <button
+            type="button"
+            className="icon-button workspace-actions-icon"
+            aria-label="Copy path"
+            title="Copy path"
+            onClick={() => window.workspaceApi.system.copyText(workspace.rootPath)}
+          >
+            <Copy {...iconProps} />
           </button>
-          <button type="button" className="solid" onClick={() => rescanWorkspace(workspace.id)}>
-            Refresh workspace
+          <button
+            type="button"
+            className="solid icon-button workspace-actions-icon"
+            aria-label="Refresh workspace"
+            title="Refresh workspace"
+            onClick={() => rescanWorkspace(workspace.id)}
+          >
+            <RefreshCw {...iconProps} />
           </button>
         </div>
 
@@ -661,7 +601,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                         onClick={() => window.workspaceApi.system.openExternal(endpoint.url)}
                       >
                         <span>{endpoint.label}</span>
-                        <ExternalLinkIcon />
+                        <ExternalLink {...iconProps} />
                       </button>
                       <button
                         type="button"
@@ -670,7 +610,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                         aria-label={`Unpin ${endpoint.label}`}
                         onClick={() => void togglePinnedEndpoint(workspace.id, { url: endpoint.url, label: endpoint.label })}
                       >
-                        <PinIcon filled />
+                        <Pin fill="currentColor" {...iconProps} />
                       </button>
                     </div>
                   ))
@@ -684,7 +624,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
               onClick={() => setPortsExpanded((value) => !value)}
             >
               <span>{portsExpanded ? 'Hide ports' : `All ports (${workspaceEndpoints.length})`}</span>
-              <ChevronDownIcon />
+              <ChevronDown {...iconProps} />
             </button>
             <button
               type="button"
@@ -733,7 +673,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                           onClick={() => window.workspaceApi.system.openExternal(endpoint.url)}
                         >
                           <span>{endpoint.label}</span>
-                          <ExternalLinkIcon />
+                          <ExternalLink {...iconProps} />
                         </button>
                         <button
                           type="button"
@@ -742,7 +682,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                           aria-label={`${isPinned ? 'Unpin' : 'Pin'} ${endpoint.label}`}
                           onClick={() => void togglePinnedEndpoint(workspace.id, { url: endpoint.url, label: endpoint.label })}
                         >
-                          <PinIcon filled={isPinned} />
+                          <Pin fill={isPinned ? 'currentColor' : 'none'} {...iconProps} />
                         </button>
                       </div>
                     )
@@ -762,9 +702,11 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
         <aside className="workspace-inspector">
           <section className="inspector-card">
             <div className="panel-switcher">
-              <div className="panel-switch-tabs">
+              <div className="panel-switch-tabs" role="tablist" aria-label="Inspector panel">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={workspaceTab === 'scripts'}
                   className={workspaceTab === 'scripts' ? 'active' : ''}
                   onClick={() => setWorkspaceTab('scripts')}
                 >
@@ -772,15 +714,22 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={workspaceTab === 'docker'}
                   className={workspaceTab === 'docker' ? 'active' : ''}
                   onClick={() => setWorkspaceTab('docker')}
                 >
                   Docker
                 </button>
               </div>
-              <button type="button" className="inspector-toggle" onClick={toggleScriptsPanel}>
-                <span>{workspaceTab === 'scripts' ? 'Scripts' : 'Docker'}</span>
-                <strong>{scriptsPanelOpen ? 'Hide' : 'Show'}</strong>
+              <button
+                type="button"
+                className="inspector-toggle"
+                aria-expanded={scriptsPanelOpen}
+                aria-label={scriptsPanelOpen ? 'Hide panel' : 'Show panel'}
+                onClick={toggleScriptsPanel}
+              >
+                {scriptsPanelOpen ? 'Hide' : 'Show'}
               </button>
             </div>
             {scriptsPanelOpen && (workspaceTab === 'scripts'
@@ -818,7 +767,7 @@ export function WorkspacePanel({ workspace }: { workspace: WorkspaceRecord }) {
                 <h2 id="run-configuration-title">Configure Run</h2>
               </div>
               <button type="button" aria-label="Close run configuration" onClick={() => setRunConfigurationOpen(false)}>
-                ×
+                <X {...iconProps} />
               </button>
             </div>
             <p className="run-configuration-description">
