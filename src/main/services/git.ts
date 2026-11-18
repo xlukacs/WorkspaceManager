@@ -356,6 +356,35 @@ async function runGitWorktreeRemove(rootPath: string, worktreePath: string, forc
   await execFileAsync('git', args, { cwd: rootPath })
 }
 
+async function removeListedGitWorktree(
+  rootPath: string,
+  target: GitWorktree,
+  options: { force: boolean; protectPaths: string[] }
+) {
+  const blockReason = worktreeRemoveBlockReason(target, options.protectPaths, { allowDirty: options.force })
+  if (blockReason) throw new Error(blockReason)
+
+  const targetPath = normalize(target.path)
+  const force = options.force || Boolean(target.isMissing)
+  try {
+    await runGitWorktreeRemove(rootPath, targetPath, force)
+  } catch (error) {
+    if (!force) {
+      throw new Error(gitCommandError(error))
+    }
+    try {
+      await runGitWorktreeRemove(rootPath, targetPath, true)
+    } catch (forceError) {
+      await pruneGitWorktrees(rootPath)
+      const remaining = await listGitWorktrees(rootPath, { enrich: false })
+      if (remaining.some((worktree) => normalize(worktree.path) === targetPath)) {
+        throw new Error(gitCommandError(forceError))
+      }
+    }
+  }
+  return targetPath
+}
+
 export async function removeGitWorktree(
   rootPath: string,
   worktreePath: string,
@@ -363,34 +392,26 @@ export async function removeGitWorktree(
 ) {
   const normalizedRoot = normalize(rootPath)
   const normalizedWorktree = normalize(worktreePath)
-  const worktrees = await listGitWorktrees(normalizedRoot)
-  const target = worktrees.find((worktree) => normalize(worktree.path) === normalizedWorktree)
-  if (!target) throw new Error(`No worktree at ${worktreePath}`)
+  // List cheaply and only inspect the one checkout being removed.
+  const worktrees = await listGitWorktrees(normalizedRoot, { enrich: false })
+  const listed = worktrees.find((worktree) => normalize(worktree.path) === normalizedWorktree)
+  if (!listed) throw new Error(`No worktree at ${worktreePath}`)
+  const target = await enrichGitWorktree(listed)
 
-  const protectPaths = options?.protectPaths ?? [normalizedRoot]
-  const blockReason = worktreeRemoveBlockReason(target, protectPaths, { allowDirty: Boolean(options?.force) })
-  if (blockReason) throw new Error(blockReason)
-
-  const force = Boolean(options?.force) || Boolean(target.isMissing)
-  try {
-    await runGitWorktreeRemove(normalizedRoot, normalizedWorktree, force)
-  } catch (error) {
-    if (!force) {
-      throw new Error(gitCommandError(error))
-    }
-    try {
-      await runGitWorktreeRemove(normalizedRoot, normalizedWorktree, true)
-    } catch (forceError) {
-      await pruneGitWorktrees(normalizedRoot)
-      const remaining = await listGitWorktrees(normalizedRoot, { enrich: false })
-      if (remaining.some((worktree) => normalize(worktree.path) === normalizedWorktree)) {
-        throw new Error(gitCommandError(forceError))
-      }
-    }
-  }
-
+  const removed = await removeListedGitWorktree(normalizedRoot, target, {
+    force: Boolean(options?.force),
+    protectPaths: options?.protectPaths ?? [normalizedRoot]
+  })
   await pruneGitWorktrees(normalizedRoot)
-  return normalizedWorktree
+  return removed
+}
+
+export interface CleanupGitWorktreesProgress {
+  total: number
+  completed: number
+  removedPaths: string[]
+  errors: string[]
+  activePaths: string[]
 }
 
 export async function cleanupGitWorktrees(
@@ -400,6 +421,7 @@ export async function cleanupGitWorktrees(
     protectPaths?: string[]
     includeDirty?: boolean
     worktreePaths?: string[]
+    onProgress?: (progress: CleanupGitWorktreesProgress) => void
   }
 ) {
   const normalizedRoot = normalize(rootPath)
@@ -407,12 +429,17 @@ export async function cleanupGitWorktrees(
   const requested = input.worktreePaths
     ? new Set(input.worktreePaths.map((path) => normalizeComparePath(path)))
     : null
-  const worktrees = await listGitWorktrees(normalizedRoot)
+  // Only inspect the checkouts that were asked for; each inspection runs several git commands.
+  const listed = await listGitWorktrees(normalizedRoot, { enrich: false })
+  const worktrees = await Promise.all(
+    listed
+      .filter((worktree) => !requested || requested.has(normalizeComparePath(worktree.path)))
+      .map((worktree) => enrichGitWorktree(worktree))
+  )
   const skipped: Array<{ path: string; reason: WorktreeCleanupSkipReason }> = []
   const candidates: GitWorktree[] = []
 
   for (const worktree of worktrees) {
-    if (requested && !requested.has(normalizeComparePath(worktree.path))) continue
     const decision = classifyWorktreeForCleanup(worktree, {
       maxAgeDays: input.maxAgeDays,
       includeDirty: input.includeDirty,
@@ -428,16 +455,47 @@ export async function cleanupGitWorktrees(
 
   const removedPaths: string[] = []
   const errors: string[] = []
+  let completed = 0
+  const report = (activePath?: string) =>
+    input.onProgress?.({
+      total: candidates.length,
+      completed,
+      removedPaths: [...removedPaths],
+      errors: [...errors],
+      activePaths: activePath ? [activePath] : []
+    })
 
+  report()
+
+  // One at a time: parallel removes race with the prune in the force fallback,
+  // and deleting files in parallel buys little on a spinning disk.
   for (const candidate of candidates) {
+    report(candidate.path)
     try {
-      await removeGitWorktree(normalizedRoot, candidate.path, {
-        force: Boolean(input.includeDirty) || Boolean(candidate.isMissing),
+      // A long run can outlive the first inspection; re-check this checkout so new
+      // commits or edits made since then keep it.
+      const fresh = await enrichGitWorktree(candidate)
+      const decision = classifyWorktreeForCleanup(fresh, {
+        maxAgeDays: input.maxAgeDays,
+        includeDirty: input.includeDirty,
+        protectPaths
+      })
+      if (!decision.eligible) {
+        if (decision.reason !== 'stale' && decision.reason !== 'missing') {
+          skipped.push({ path: fresh.path, reason: decision.reason })
+        }
+        continue
+      }
+      await removeListedGitWorktree(normalizedRoot, fresh, {
+        force: Boolean(input.includeDirty) || Boolean(fresh.isMissing),
         protectPaths
       })
       removedPaths.push(candidate.path)
     } catch (error) {
       errors.push(error instanceof Error ? error.message : gitCommandError(error))
+    } finally {
+      completed += 1
+      report()
     }
   }
 

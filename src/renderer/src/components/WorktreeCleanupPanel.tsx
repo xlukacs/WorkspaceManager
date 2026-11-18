@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Clock, Trash2 } from 'lucide-react'
+import { Clock, Loader2, Trash2, X } from 'lucide-react'
 import type { GitWorktree, WorkspaceRecord } from '@shared/types'
 import {
   DEFAULT_WORKTREE_CLEANUP_MAX_AGE_DAYS,
   WORKTREE_CLEANUP_AGE_OPTIONS,
+  estimateWorktreeCleanupRemainingMs,
+  formatWorktreeCleanupEta,
   normalizeWorktreeCleanupMaxAgeDays,
   selectWorktreesForCleanup,
   worktreeCleanupReasonLabel,
-  type WorktreeCleanupAgeDays
+  type WorktreeCleanupAgeDays,
+  type WorktreeCleanupJob
 } from '@shared/worktreeCleanup'
 import { worktreeLabel } from '@shared/worktreeExecution'
 import { useAppStore } from '@renderer/store/useAppStore'
@@ -37,18 +40,81 @@ function writeWorktreeCleanupSettings(settings: WorktreeCleanupSettings) {
   window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
 }
 
+function countLabel(count: number) {
+  return count === 1 ? '1 checkout' : `${count} checkouts`
+}
+
+function formatElapsed(ms: number) {
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  return seconds % 60 > 0 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`
+}
+
+function useNow() {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return now
+}
+
+function CleanupProgress({ job, labelFor }: { job: WorktreeCleanupJob; labelFor: (path: string) => string }) {
+  const now = useNow()
+  const preparing = job.removalStartedAt == null
+  const finishing = !preparing && job.completed >= job.total
+  const percent = job.total > 0 ? Math.round((job.completed / job.total) * 100) : 100
+  const eta = finishing ? 'Finishing up…' : formatWorktreeCleanupEta(estimateWorktreeCleanupRemainingMs(job, now))
+
+  return (
+    <div className="worktree-cleanup-progress" role="status" aria-live="polite">
+      <div className="worktree-cleanup-progress-head">
+        <Loader2 size={14} strokeWidth={1.75} className="spin" aria-hidden="true" />
+        <strong>
+          {preparing ? 'Checking checkouts…' : `${job.completed} of ${job.total} done`}
+        </strong>
+        {!preparing && <span>{eta}</span>}
+      </div>
+      <div
+        className={`worktree-cleanup-progress-bar${preparing ? ' indeterminate' : ''}`}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={job.total}
+        aria-valuenow={preparing ? undefined : job.completed}
+        aria-label="Cleanup progress"
+      >
+        <span style={preparing ? undefined : { width: `${percent}%` }} />
+      </div>
+      {job.activePaths.length > 0 && (
+        <p className="worktree-cleanup-progress-active" title={job.activePaths.join('\n')}>
+          Removing {job.activePaths.map(labelFor).join(', ')}
+        </p>
+      )}
+      <p className="worktree-cleanup-progress-note">You can close this dialog. Cleanup keeps running.</p>
+    </div>
+  )
+}
+
 interface WorktreeCleanupPanelProps {
   workspace: WorkspaceRecord
   busy: boolean
   protectPaths: string[]
-  onBusy: (action: () => Promise<void>) => Promise<void>
 }
 
-export function WorktreeCleanupPanel({ workspace, busy, protectPaths, onBusy }: WorktreeCleanupPanelProps) {
+export function WorktreeCleanupPanel({ workspace, busy: dialogBusy, protectPaths }: WorktreeCleanupPanelProps) {
   const cleanupGitWorktrees = useAppStore((state) => state.cleanupGitWorktrees)
+  const dismissWorktreeCleanupJob = useAppStore((state) => state.dismissWorktreeCleanupJob)
+  const job = useAppStore((state) => state.worktreeCleanupJobs[workspace.id])
+  const running = job?.status === 'running'
+  const busy = dialogBusy || running
   const [settings, setSettings] = useState<WorktreeCleanupSettings>(() => readWorktreeCleanupSettings())
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
-  const [resultMessage, setResultMessage] = useState<string | null>(null)
+
+  function labelFor(path: string) {
+    const worktree = workspace.gitWorktrees?.find((entry) => entry.path === path)
+    return worktreeLabel(worktree ?? { path, branch: null } as GitWorktree)
+  }
 
   const matches = useMemo(
     () =>
@@ -78,22 +144,21 @@ export function WorktreeCleanupPanel({ workspace, busy, protectPaths, onBusy }: 
     )
   }
 
-  async function removeSelected() {
+  function removeSelected() {
     const worktreePaths = matches
       .map((entry) => entry.worktree.path)
       .filter((path) => selectedPaths.includes(path))
-    if (worktreePaths.length === 0) return
+    if (worktreePaths.length === 0 || running) return
 
-    await onBusy(async () => {
-      const removed = await cleanupGitWorktrees({
-        workspaceId: workspace.id,
-        maxAgeDays: settings.maxAgeDays,
-        includeDirty: settings.includeDirty,
-        protectPaths,
-        worktreePaths
-      })
-      const countLabel = removed.length === 1 ? 'Removed 1 checkout.' : `Removed ${removed.length} checkouts.`
-      setResultMessage(countLabel)
+    // Runs in the store, so it keeps going after the dialog closes.
+    void cleanupGitWorktrees({
+      workspaceId: workspace.id,
+      maxAgeDays: settings.maxAgeDays,
+      includeDirty: settings.includeDirty,
+      protectPaths,
+      worktreePaths
+    }).catch(() => {
+      // The job and lastActionError carry the failure.
     })
   }
 
@@ -101,7 +166,9 @@ export function WorktreeCleanupPanel({ workspace, busy, protectPaths, onBusy }: 
     <section className="worktree-cleanup" aria-labelledby="worktree-cleanup-title">
       <div className="worktrees-dialog-section-head">
         <h3 id="worktree-cleanup-title">Cleanup</h3>
-        <span className="workspace-meta-badge subtle">{matches.length} ready</span>
+        <span className="workspace-meta-badge subtle">
+          {running ? 'Running' : `${matches.length} ready`}
+        </span>
       </div>
 
       <p className="worktree-cleanup-copy">
@@ -141,7 +208,9 @@ export function WorktreeCleanupPanel({ workspace, busy, protectPaths, onBusy }: 
         <span>Include checkouts with uncommitted changes</span>
       </label>
 
-      {matches.length > 0 ? (
+      {running ? (
+        <CleanupProgress job={job} labelFor={labelFor} />
+      ) : matches.length > 0 ? (
         <div className="worktree-cleanup-list">
           {matches.map((entry) => {
             const worktree: GitWorktree = entry.worktree
@@ -179,15 +248,28 @@ export function WorktreeCleanupPanel({ workspace, busy, protectPaths, onBusy }: 
           type="button"
           className="danger"
           disabled={busy || selectedCount === 0}
-          onClick={() => void removeSelected()}
+          onClick={removeSelected}
         >
           <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
-          {selectedCount === 1 ? 'Remove 1 checkout' : `Remove ${selectedCount} checkouts`}
+          {running ? 'Removing…' : `Remove ${countLabel(selectedCount)}`}
         </button>
-        {resultMessage && (
-          <p className="worktree-cleanup-result" role="status">
+        {job && !running && (
+          <p className={`worktree-cleanup-result${job.errors.length > 0 ? ' has-errors' : ''}`} role="status">
             <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
-            {resultMessage}
+            <span>
+              {job.status === 'failed' ? 'Cleanup failed.' : `Removed ${countLabel(job.removedPaths.length)}.`}
+              {job.status === 'done' && job.errors.length > 0 && ` ${countLabel(job.errors.length)} could not be removed.`}
+              {job.finishedAt != null && ` Took ${formatElapsed(job.finishedAt - job.startedAt)}.`}
+            </span>
+            <button
+              type="button"
+              className="sidebar-row-action"
+              aria-label="Dismiss cleanup result"
+              title="Dismiss"
+              onClick={() => dismissWorktreeCleanupJob(workspace.id)}
+            >
+              <X size={12} strokeWidth={1.75} aria-hidden="true" />
+            </button>
           </p>
         )}
       </div>

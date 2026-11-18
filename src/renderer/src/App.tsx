@@ -88,7 +88,11 @@ function AppContent() {
     const unsubscribeExit = window.workspaceApi.terminals.subscribeExit(handleTerminalExit)
     const unsubscribeWorkspace = window.workspaceApi.workspaces.subscribeUpdated((workspace) => { void handleWorkspaceUpdate(workspace) })
     const unsubscribeScanError = window.workspaceApi.workspaces.subscribeScanError((message) => useAppStore.setState({ lastActionError: message }))
+    const unsubscribeCleanup = window.workspaceApi.git?.subscribeCleanupProgress?.((event) =>
+      useAppStore.getState().handleWorktreeCleanupProgress(event)
+    )
     return () => {
+      unsubscribeCleanup?.()
       unsubscribeAppChanged?.()
       unsubscribeOutput()
       unsubscribeExit()

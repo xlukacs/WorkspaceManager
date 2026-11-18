@@ -16,6 +16,7 @@ import type {
   DockerCommandListResponse,
   EditorTarget,
   GitSummary,
+  GitCleanupProgressEvent,
   GitWorktree,
   LinkUpsertInput,
   WorkspaceCandidate,
@@ -62,6 +63,8 @@ interface BrowserPreviewState {
 const STORAGE_KEY = 'workspace-manager:web-preview'
 const outputListeners = new Set<(event: TerminalOutputEvent) => void>()
 const exitListeners = new Set<(event: TerminalExitEvent) => void>()
+const cleanupProgressListeners = new Set<(event: GitCleanupProgressEvent) => void>()
+const MOCK_CLEANUP_REMOVE_MS = 900
 const exitTimers = new Map<string, number>()
 
 function secondsAgo(seconds: number) {
@@ -1436,13 +1439,9 @@ const browserApi: WorkspaceApi = {
       const protectPaths = [workspace.rootPath, ...(input.protectPaths ?? [])]
       const removedPaths: string[] = []
       const skipped: Array<{ path: string; reason: string }> = []
-      const kept: GitWorktree[] = []
 
       for (const worktree of workspace.gitWorktrees) {
-        if (requested && !requested.has(normalizeComparePath(worktree.path))) {
-          kept.push(worktree)
-          continue
-        }
+        if (requested && !requested.has(normalizeComparePath(worktree.path))) continue
         const decision = classifyWorktreeForCleanup(worktree, {
           maxAgeDays: input.maxAgeDays,
           includeDirty: input.includeDirty,
@@ -1452,13 +1451,31 @@ const browserApi: WorkspaceApi = {
           removedPaths.push(worktree.path)
           continue
         }
-        kept.push(worktree)
         skipped.push({ path: worktree.path, reason: decision.reason })
       }
 
+      // Simulate slow removals so the progress UI can be previewed.
+      const emit = (completed: number) =>
+        cleanupProgressListeners.forEach((listener) =>
+          listener({
+            workspaceId: workspace.id,
+            total: removedPaths.length,
+            completed,
+            removedPaths: removedPaths.slice(0, completed),
+            errors: [],
+            activePaths: removedPaths.slice(completed, completed + 1)
+          })
+        )
+      for (let completed = 0; completed < removedPaths.length; completed += 1) {
+        emit(completed)
+        await new Promise((resolve) => setTimeout(resolve, MOCK_CLEANUP_REMOVE_MS))
+      }
+      emit(removedPaths.length)
+
+      const latest = findWorkspace(input.workspaceId) ?? workspace
       const next = upsertWorkspace({
-        ...workspace,
-        gitWorktrees: kept,
+        ...latest,
+        gitWorktrees: latest.gitWorktrees.filter((worktree) => !removedPaths.includes(worktree.path)),
         lastScanAt: Date.now()
       })
       return clone({ workspace: toRecord(next), removedPaths, skipped, errors: [] })
@@ -1481,6 +1498,10 @@ const browserApi: WorkspaceApi = {
         lastScanAt: Date.now()
       })
       return clone({ workspace: toRecord(next), worktreePath: target.path })
+    },
+    subscribeCleanupProgress(callback) {
+      cleanupProgressListeners.add(callback)
+      return () => cleanupProgressListeners.delete(callback)
     }
   },
   links: {

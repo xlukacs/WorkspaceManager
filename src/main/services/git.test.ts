@@ -194,6 +194,35 @@ describe('cleanupGitWorktrees', () => {
     expect(remaining.map((worktree) => worktree.path)).not.toContain(normalize(stalePath))
   })
 
+  it('reports progress for each removal', async () => {
+    const root = await initRepo()
+    const old = new Date(Date.now() - TEN_DAYS_MS)
+    await writeFile(join(root, 'README.md'), 'hello\n')
+    await commitAll(root, 'init', old)
+
+    const worktreesRoot = await convertRepoToWorktrees(root)
+    const paths: string[] = []
+    for (const branch of ['one', 'two', 'three']) {
+      const path = await createGitWorktree(root, { worktreesRoot, branch, createBranch: true })
+      await stampWorktreeOld(path, old)
+      paths.push(path)
+    }
+
+    const events: Array<{ total: number; completed: number; activePaths: string[] }> = []
+    const result = await cleanupGitWorktrees(root, {
+      maxAgeDays: 7,
+      protectPaths: [root],
+      worktreePaths: paths.slice(0, 2),
+      onProgress: (progress) => events.push(progress)
+    })
+
+    expect(result.removedPaths.sort()).toEqual(paths.slice(0, 2).map((path) => normalize(path)).sort())
+    expect(events[0]).toMatchObject({ total: 2, completed: 0 })
+    expect(events.at(-1)).toMatchObject({ total: 2, completed: 2, activePaths: [] })
+    const remaining = await listGitWorktrees(root, { enrich: false })
+    expect(remaining.map((worktree) => worktree.path)).toContain(normalize(paths[2]!))
+  })
+
   it('does not remove a dirty idle checkout unless forced', async () => {
     const root = await initRepo()
     const old = new Date(Date.now() - TEN_DAYS_MS)

@@ -38,6 +38,7 @@ export function WorktreesDialog({ workspaceId, open, onClose }: WorktreesDialogP
   const lastActionError = useAppStore((state) => state.lastActionError)
   const clearActionError = useAppStore((state) => state.clearActionError)
   const selectedWorktreePath = useAppStore((state) => state.getSelectedWorktreePath(workspaceId))
+  const cleanupRunning = useAppStore((state) => state.worktreeCleanupJobs[workspaceId]?.status === 'running')
 
   const workspace = useMemo(
     () => workspaces.find((entry) => entry.id === workspaceId) ?? null,
@@ -221,7 +222,6 @@ export function WorktreesDialog({ workspaceId, open, onClose }: WorktreesDialogP
             workspace={workspace}
             busy={busy}
             protectPaths={protectPaths}
-            onBusy={runWorktreeAction}
           />
 
           <section className="worktrees-dialog-section">
@@ -296,8 +296,10 @@ export function WorktreesDialog({ workspaceId, open, onClose }: WorktreesDialogP
                         <button
                           type="button"
                           className="danger"
-                          title={removeBlock ?? `Remove ${worktreeLabel(worktree)}`}
-                          disabled={busy || Boolean(removeBlock)}
+                          title={
+                            removeBlock ?? (cleanupRunning ? 'Cleanup is running' : `Remove ${worktreeLabel(worktree)}`)
+                          }
+                          disabled={busy || cleanupRunning || Boolean(removeBlock)}
                           onClick={() => runWorktreeAction(() => removeGitWorktree(workspace.id, worktree.path))}
                         >
                           <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />

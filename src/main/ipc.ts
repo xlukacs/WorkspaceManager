@@ -16,6 +16,7 @@ import type {
   AddWorkspacesInput,
   CleanupGitWorktreesInput,
   CleanupGitWorktreesResult,
+  GitCleanupProgressEvent,
   ConvertRepoToWorktreesResult,
   GroupCreateInput,
   GroupUpdateInput,
@@ -128,23 +129,37 @@ async function forgetRemovedWorktrees(
   }
 }
 
+const runningCleanups = new Set<string>()
+
 async function cleanupGitWorktreesWorkspace(
   store: AppStore,
   terminalManager: TerminalManager,
-  input: CleanupGitWorktreesInput
+  input: CleanupGitWorktreesInput,
+  onProgress?: (event: GitCleanupProgressEvent) => void
 ): Promise<CleanupGitWorktreesResult> {
   const existing = store.getWorkspaceRecord(input.workspaceId)
   if (!existing) throw new Error('Workspace not found.')
+  if (runningCleanups.has(existing.id)) throw new Error('A cleanup is already running for this workspace.')
 
-  const result = await cleanupGitWorktrees(existing.rootPath, {
-    maxAgeDays: input.maxAgeDays,
-    includeDirty: input.includeDirty,
-    protectPaths: [existing.rootPath, ...(input.protectPaths ?? [])],
-    worktreePaths: input.worktreePaths
-  })
-  await forgetRemovedWorktrees(store, terminalManager, existing.id, result.removedPaths)
-  const workspace = await scanAndStoreWorkspace(store, existing.rootPath, existing.groupId, existing)
-  return { workspace, removedPaths: result.removedPaths, skipped: result.skipped, errors: result.errors }
+  runningCleanups.add(existing.id)
+  try {
+    const result = await cleanupGitWorktrees(existing.rootPath, {
+      maxAgeDays: input.maxAgeDays,
+      includeDirty: input.includeDirty,
+      protectPaths: [existing.rootPath, ...(input.protectPaths ?? [])],
+      worktreePaths: input.worktreePaths,
+      onProgress: onProgress && ((progress) => onProgress({ workspaceId: existing.id, ...progress }))
+    })
+    await forgetRemovedWorktrees(store, terminalManager, existing.id, result.removedPaths)
+    // Cleanup can run for minutes with the dialog closed; rescan from the current
+    // record so edits made meanwhile survive, and never revive a removed workspace.
+    const latest = store.getWorkspaceRecord(existing.id)
+    if (!latest) throw new Error('The workspace was removed while cleanup ran.')
+    const workspace = await scanAndStoreWorkspace(store, latest.rootPath, latest.groupId, latest)
+    return { workspace, removedPaths: result.removedPaths, skipped: result.skipped, errors: result.errors }
+  } finally {
+    runningCleanups.delete(existing.id)
+  }
 }
 
 async function removeGitWorktreeWorkspace(
@@ -154,6 +169,7 @@ async function removeGitWorktreeWorkspace(
 ): Promise<RemoveGitWorktreeResult> {
   const existing = store.getWorkspaceRecord(input.workspaceId)
   if (!existing) throw new Error('Workspace not found.')
+  if (runningCleanups.has(existing.id)) throw new Error('Wait for the running cleanup to finish.')
 
   const worktreePath = await removeGitWorktree(existing.rootPath, input.worktreePath, {
     protectPaths: [existing.rootPath]
@@ -457,9 +473,30 @@ export function registerIpc(mainWindow: BrowserWindow, store: AppStore, ensureWi
   ipcMain.handle('git.createWorktree', async (_event, input: CreateGitWorktreeInput) =>
     createGitWorktreeWorkspace(store, input)
   )
-  ipcMain.handle('git.cleanupWorktrees', async (_event, input: CleanupGitWorktreesInput) =>
-    cleanupGitWorktreesWorkspace(store, terminalManager, input)
-  )
+  const sendCleanupProgress = (event: GitCleanupProgressEvent) => {
+    if (mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+    mainWindow.webContents.send('git:cleanupProgress', event)
+  }
+  ipcMain.handle('git.cleanupWorktrees', async (_event, input: CleanupGitWorktreesInput) => {
+    let last: GitCleanupProgressEvent | undefined
+    const onProgress = (event: GitCleanupProgressEvent) => {
+      last = event
+      sendCleanupProgress(event)
+    }
+    // Lets a reloaded window, which lost the pending request, close out the job.
+    // Only sent once a run has reported, so a refused request leaves a running job alone.
+    const finish = (failed: boolean, errors?: string[]) => {
+      if (last) sendCleanupProgress({ ...last, activePaths: [], errors: errors ?? last.errors, finished: true, failed })
+    }
+    try {
+      const result = await cleanupGitWorktreesWorkspace(store, terminalManager, input, onProgress)
+      finish(false, result.errors)
+      return result
+    } catch (error) {
+      finish(true, [error instanceof Error ? error.message : String(error)])
+      throw error
+    }
+  })
   ipcMain.handle('git.removeWorktree', async (_event, input: RemoveGitWorktreeInput) =>
     removeGitWorktreeWorkspace(store, terminalManager, input)
   )

@@ -3132,6 +3132,100 @@ select {
   font-size: 0.84rem;
 }
 
+.worktree-cleanup-result.has-errors {
+  color: #ffd7dc;
+}
+
+.worktree-cleanup-result .sidebar-row-action {
+  padding: 0.15rem;
+}
+
+.worktree-cleanup-progress {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(255, 200, 87, 0.22);
+  border-radius: var(--radius-lg);
+  background: rgba(4, 9, 17, 0.35);
+}
+
+.worktree-cleanup-progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.worktree-cleanup-progress-head span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.worktree-cleanup-progress-head .spin {
+  color: var(--accent);
+  animation: worktree-cleanup-spin 0.9s linear infinite;
+}
+
+.worktree-cleanup-progress-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.worktree-cleanup-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.worktree-cleanup-progress-bar.indeterminate span {
+  width: 35%;
+  animation: worktree-cleanup-slide 1.2s ease-in-out infinite;
+}
+
+.worktree-cleanup-progress-active,
+.worktree-cleanup-progress-note {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-cleanup-progress-note {
+  white-space: normal;
+}
+
+@keyframes worktree-cleanup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes worktree-cleanup-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worktree-cleanup-progress-head .spin,
+  .worktree-cleanup-progress-bar.indeterminate span {
+    animation: none;
+  }
+}
+
 .worktrees-dialog-footer {
   display: flex;
   justify-content: flex-end;
