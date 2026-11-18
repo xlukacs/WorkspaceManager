@@ -118,3 +118,94 @@ export function worktreeRemoveBlockReason(
   if (worktree.isDirty && !options?.allowDirty) return 'This checkout has uncommitted changes.'
   return null
 }
+
+export interface WorktreeCleanupJob {
+  workspaceId: string
+  status: 'running' | 'done' | 'failed'
+  total: number
+  completed: number
+  removedPaths: string[]
+  errors: string[]
+  /** Checkouts being removed right now. */
+  activePaths: string[]
+  startedAt: number
+  /** When this window started timing removals: after inspection, or when it joined a run. */
+  removalStartedAt: number | null
+  /** Removals already done when timing started; they say nothing about pace. */
+  baselineCompleted: number
+  lastCompletedAt: number | null
+  finishedAt: number | null
+}
+
+export interface WorktreeCleanupProgressUpdate {
+  total: number
+  completed: number
+  removedPaths: string[]
+  errors: string[]
+  activePaths: string[]
+}
+
+export function startWorktreeCleanupJob(workspaceId: string, total: number, now: number): WorktreeCleanupJob {
+  return {
+    workspaceId,
+    status: 'running',
+    total,
+    completed: 0,
+    removedPaths: [],
+    errors: [],
+    activePaths: [],
+    startedAt: now,
+    removalStartedAt: null,
+    baselineCompleted: 0,
+    lastCompletedAt: null,
+    finishedAt: null
+  }
+}
+
+export function applyWorktreeCleanupProgress(
+  job: WorktreeCleanupJob | undefined,
+  workspaceId: string,
+  update: WorktreeCleanupProgressUpdate,
+  now: number
+): WorktreeCleanupJob {
+  const base = job && job.status === 'running' ? job : startWorktreeCleanupJob(workspaceId, update.total, now)
+  const timing = base.removalStartedAt == null
+  return {
+    ...base,
+    total: update.total,
+    completed: update.completed,
+    removedPaths: update.removedPaths,
+    errors: update.errors,
+    activePaths: update.activePaths,
+    removalStartedAt: timing ? now : base.removalStartedAt,
+    baselineCompleted: timing ? update.completed : base.baselineCompleted,
+    lastCompletedAt: !timing && update.completed > base.completed ? now : base.lastCompletedAt
+  }
+}
+
+/**
+ * Estimate time left from the pace of finished removals. Counts down between
+ * removals instead of growing while the next one runs. Null until one finishes.
+ */
+export function estimateWorktreeCleanupRemainingMs(job: WorktreeCleanupJob, now: number): number | null {
+  if (job.status !== 'running') return null
+  const remaining = job.total - job.completed
+  const timed = job.completed - job.baselineCompleted
+  if (remaining <= 0 || timed <= 0) return null
+  if (job.removalStartedAt == null || job.lastCompletedAt == null) return null
+  const perItem = Math.max(0, job.lastCompletedAt - job.removalStartedAt) / timed
+  const sinceLast = Math.max(0, now - job.lastCompletedAt)
+  return Math.max(0, Math.round(perItem * remaining - sinceLast))
+}
+
+export function formatWorktreeCleanupEta(remainingMs: number | null) {
+  if (remainingMs == null) return 'Estimating time left…'
+  if (remainingMs < 5_000) return 'Almost done'
+  const totalSeconds = Math.round(remainingMs / 1000)
+  if (totalSeconds < 60) return `About ${totalSeconds}s left`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return seconds > 0 ? `About ${minutes}m ${seconds}s left` : `About ${minutes}m left`
+  const hours = Math.floor(minutes / 60)
+  return `About ${hours}h ${minutes % 60}m left`
+}

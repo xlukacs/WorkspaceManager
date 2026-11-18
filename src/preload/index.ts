@@ -87,7 +87,12 @@ const api: WorkspaceApi = {
     convertRepoToWorktrees: (workspaceId) => ipcRenderer.invoke('git.convertRepoToWorktrees', workspaceId),
     createWorktree: (input) => ipcRenderer.invoke('git.createWorktree', input),
     cleanupWorktrees: (input) => ipcRenderer.invoke('git.cleanupWorktrees', input),
-    removeWorktree: (input) => ipcRenderer.invoke('git.removeWorktree', input)
+    removeWorktree: (input) => ipcRenderer.invoke('git.removeWorktree', input),
+    subscribeCleanupProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload)
+      ipcRenderer.on('git:cleanupProgress', listener)
+      return () => ipcRenderer.removeListener('git:cleanupProgress', listener)
+    }
   },
   links: {
     list: (workspaceId) => ipcRenderer.invoke('links.list', workspaceId),

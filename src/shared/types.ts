@@ -193,6 +193,19 @@ export interface CleanupGitWorktreesResult {
   errors: string[]
 }
 
+export interface GitCleanupProgressEvent {
+  workspaceId: string
+  total: number
+  completed: number
+  removedPaths: string[]
+  errors: string[]
+  /** Checkouts being removed right now. */
+  activePaths: string[]
+  /** Sent once the cleanup and the follow-up rescan are over. */
+  finished?: boolean
+  failed?: boolean
+}
+
 export interface RemoveGitWorktreeInput {
   workspaceId: string
   worktreePath: string
@@ -497,6 +510,7 @@ export interface WorkspaceApi {
     createWorktree: (input: CreateGitWorktreeInput) => Promise<CreateGitWorktreeResult>
     cleanupWorktrees: (input: CleanupGitWorktreesInput) => Promise<CleanupGitWorktreesResult>
     removeWorktree: (input: RemoveGitWorktreeInput) => Promise<RemoveGitWorktreeResult>
+    subscribeCleanupProgress?: (callback: (event: GitCleanupProgressEvent) => void) => () => void
   }
   links: {
     list: (workspaceId: string) => Promise<QuickLink[]>

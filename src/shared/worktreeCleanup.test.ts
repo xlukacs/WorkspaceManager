@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { GitWorktree } from '@shared/types'
 import {
+  applyWorktreeCleanupProgress,
   classifyWorktreeForCleanup,
+  estimateWorktreeCleanupRemainingMs,
+  formatWorktreeCleanupEta,
+  startWorktreeCleanupJob,
   selectWorktreesForCleanup,
   worktreeCleanupCutoffAt,
   worktreeRemoveBlockReason
@@ -72,5 +76,50 @@ describe('worktreeCleanup', () => {
     expect(worktreeRemoveBlockReason(worktree({ isDirty: true }), undefined, { allowDirty: true })).toBeNull()
     expect(worktreeRemoveBlockReason(worktree(), ['/repos/demo/.worktrees/feature'])).toMatch(/active workspace/i)
     expect(worktreeRemoveBlockReason(worktree())).toBeNull()
+  })
+})
+
+describe('worktree cleanup progress', () => {
+  const update = (completed: number, total = 10) => ({
+    total,
+    completed,
+    removedPaths: [],
+    errors: [],
+    activePaths: []
+  })
+
+  it('waits for one removal before estimating', () => {
+    let job = startWorktreeCleanupJob('ws', 10, 0)
+    expect(estimateWorktreeCleanupRemainingMs(job, 500)).toBeNull()
+    job = applyWorktreeCleanupProgress(job, 'ws', update(0), 1_000)
+    expect(job.removalStartedAt).toBe(1_000)
+    expect(estimateWorktreeCleanupRemainingMs(job, 5_000)).toBeNull()
+  })
+
+  it('estimates from the removal pace and counts down between removals', () => {
+    let job = applyWorktreeCleanupProgress(startWorktreeCleanupJob('ws', 10, 0), 'ws', update(0), 1_000)
+    job = applyWorktreeCleanupProgress(job, 'ws', update(2), 5_000)
+    // 2s per removal, 8 left.
+    expect(estimateWorktreeCleanupRemainingMs(job, 5_000)).toBe(16_000)
+    expect(estimateWorktreeCleanupRemainingMs(job, 8_000)).toBe(13_000)
+    expect(estimateWorktreeCleanupRemainingMs(job, 60_000)).toBe(0)
+  })
+
+  it('joins a run in progress and times only the removals it sees', () => {
+    let job = applyWorktreeCleanupProgress(undefined, 'ws', update(3, 10), 2_000)
+    expect(job).toMatchObject({ workspaceId: 'ws', status: 'running', total: 10, completed: 3 })
+    expect(estimateWorktreeCleanupRemainingMs(job, 2_000)).toBeNull()
+    job = applyWorktreeCleanupProgress(job, 'ws', update(4, 10), 5_000)
+    // One removal seen, 3s each, 6 left.
+    expect(estimateWorktreeCleanupRemainingMs(job, 5_000)).toBe(18_000)
+  })
+
+  it('formats the time left', () => {
+    expect(formatWorktreeCleanupEta(null)).toMatch(/estimating/i)
+    expect(formatWorktreeCleanupEta(2_000)).toBe('Almost done')
+    expect(formatWorktreeCleanupEta(42_000)).toBe('About 42s left')
+    expect(formatWorktreeCleanupEta(125_000)).toBe('About 2m 5s left')
+    expect(formatWorktreeCleanupEta(120_000)).toBe('About 2m left')
+    expect(formatWorktreeCleanupEta(3_900_000)).toBe('About 1h 5m left')
   })
 })

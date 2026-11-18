@@ -12,6 +12,11 @@ import { createRafBatch } from '@shared/debounce'
 import { appendTerminalBuffer, containsDomRendererLeak } from '@shared/terminalBuffer'
 import { normalizeComparePath, resolveMainWorktreePath, resolveSelectedWorktreePath } from '@shared/worktreeExecution'
 import { normalizeWorkspaceRecord } from '@shared/workspaceModel'
+import {
+  applyWorktreeCleanupProgress,
+  startWorktreeCleanupJob,
+  type WorktreeCleanupJob
+} from '@shared/worktreeCleanup'
 import { moveWorkspaceToGroup, sortByOrder, sortWorkspacesForSidebar, workspacesInGroup } from '@shared/workspaceGroups'
 import {
   type AppSettings,
@@ -21,6 +26,7 @@ import {
   type CleanupGitWorktreesInput,
   type CleanupGitWorktreesResult,
   type CreateGitWorktreeInput,
+  type GitCleanupProgressEvent,
   type CommandListResponse,
   type DockerCommandListResponse,
   type WorkspaceCandidate,
@@ -70,6 +76,9 @@ async function cleanupGitWorktreesViaApi(input: CleanupGitWorktreesInput): Promi
   return { workspace, removedPaths: [], skipped: [], errors: [] }
 }
 
+/** Workspaces whose cleanup request this window is still awaiting. */
+const awaitedCleanups = new Set<string>()
+
 async function removeGitWorktreeViaApi(input: RemoveGitWorktreeInput): Promise<RemoveGitWorktreeResult> {
   const { git, workspaces } = window.workspaceApi
   if (typeof git.removeWorktree === 'function') {
@@ -112,6 +121,8 @@ interface AppState {
   importDrawerOpen: boolean
   bootstrapped: boolean
   lastActionError: string | null
+  /** Cleanup runs per workspace; they outlive the worktrees dialog. */
+  worktreeCleanupJobs: Record<string, WorktreeCleanupJob>
   bootstrap: () => Promise<void>
   toggleSidebar: () => void
   toggleConsoleFullscreen: () => void
@@ -136,6 +147,8 @@ interface AppState {
   convertRepoToWorktrees: (workspaceId: string) => Promise<void>
   createGitWorktree: (workspaceId: string, branch: string, createBranch: boolean) => Promise<void>
   cleanupGitWorktrees: (input: CleanupGitWorktreesInput) => Promise<string[]>
+  handleWorktreeCleanupProgress: (event: GitCleanupProgressEvent) => void
+  dismissWorktreeCleanupJob: (workspaceId: string) => void
   removeGitWorktree: (workspaceId: string, worktreePath: string) => Promise<void>
   importAllGitWorktrees: (workspaceId: string) => Promise<void>
   removeWorkspace: (workspaceId: string) => Promise<void>
@@ -317,6 +330,7 @@ export const useAppStore = create<AppState>((set, get) => {
   importDrawerOpen: false,
   bootstrapped: false,
   lastActionError: null,
+  worktreeCleanupJobs: {},
   async bootstrap() {
     const [groups, workspaces, terminals, migrationNotes, savedUi, settings] = await Promise.all([
       window.workspaceApi.groups.list(),
@@ -625,6 +639,24 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   },
   async cleanupGitWorktrees(input) {
+    const { workspaceId } = input
+    if (get().worktreeCleanupJobs[workspaceId]?.status === 'running') {
+      throw new Error('A cleanup is already running for this workspace.')
+    }
+    const setJob = (update: (job: WorktreeCleanupJob) => WorktreeCleanupJob) =>
+      set((state) => {
+        const job = state.worktreeCleanupJobs[workspaceId]
+        if (!job) return {}
+        return { worktreeCleanupJobs: { ...state.worktreeCleanupJobs, [workspaceId]: update(job) } }
+      })
+
+    set((state) => ({
+      worktreeCleanupJobs: {
+        ...state.worktreeCleanupJobs,
+        [workspaceId]: startWorktreeCleanupJob(workspaceId, input.worktreePaths?.length ?? 0, Date.now())
+      }
+    }))
+    awaitedCleanups.add(workspaceId)
     try {
       const result = await cleanupGitWorktreesViaApi(input)
       const terminals = await window.workspaceApi.terminals.list()
@@ -632,13 +664,76 @@ export const useAppStore = create<AppState>((set, get) => {
         ...applyRemovedWorktrees(state, result.workspace, result.removedPaths, terminals),
         lastActionError: result.errors.length > 0 ? result.errors.join('\n') : null
       }))
+      setJob((job) => ({
+        ...job,
+        status: 'done',
+        total: Math.max(job.total, result.removedPaths.length + result.errors.length),
+        completed: Math.max(job.total, result.removedPaths.length + result.errors.length),
+        removedPaths: result.removedPaths,
+        errors: result.errors,
+        activePaths: [],
+        finishedAt: Date.now()
+      }))
       return result.removedPaths
     } catch (error) {
-      set({
-        lastActionError: error instanceof Error ? error.message : 'Failed to clean up git worktrees.'
-      })
+      const message = error instanceof Error ? error.message : 'Failed to clean up git worktrees.'
+      set({ lastActionError: message })
+      setJob((job) => ({
+        ...job,
+        status: 'failed',
+        errors: job.errors.length > 0 ? job.errors : [message],
+        activePaths: [],
+        finishedAt: Date.now()
+      }))
       throw error
+    } finally {
+      awaitedCleanups.delete(workspaceId)
     }
+  },
+  handleWorktreeCleanupProgress(event) {
+    const { workspaceId, finished, failed, ...update } = event
+    const current = get().worktreeCleanupJobs[workspaceId]
+    // Late events for a finished job must not restart it.
+    if (current && current.status !== 'running') return
+    if (finished) {
+      // The awaited request settles the job itself; this covers a reloaded window.
+      if (awaitedCleanups.has(workspaceId) || !current) return
+      set((state) => ({
+        worktreeCleanupJobs: {
+          ...state.worktreeCleanupJobs,
+          [workspaceId]: {
+            ...current,
+            ...update,
+            status: failed ? 'failed' : 'done',
+            finishedAt: Date.now()
+          }
+        }
+      }))
+      void Promise.all([
+        window.workspaceApi.workspaces.getDetails(workspaceId),
+        window.workspaceApi.terminals.list()
+      ])
+        .then(([workspace, terminals]) => {
+          if (!workspace) return
+          set((state) => applyRemovedWorktrees(state, normalizeWorkspaceRecord(workspace), update.removedPaths, terminals))
+        })
+        .catch(() => undefined)
+      return
+    }
+    set((state) => ({
+      worktreeCleanupJobs: {
+        ...state.worktreeCleanupJobs,
+        [workspaceId]: applyWorktreeCleanupProgress(state.worktreeCleanupJobs[workspaceId], workspaceId, update, Date.now())
+      }
+    }))
+  },
+  dismissWorktreeCleanupJob(workspaceId) {
+    set((state) => {
+      const job = state.worktreeCleanupJobs[workspaceId]
+      if (!job || job.status === 'running') return {}
+      const { [workspaceId]: _dismissed, ...rest } = state.worktreeCleanupJobs
+      return { worktreeCleanupJobs: rest }
+    })
   },
   async removeGitWorktree(workspaceId, worktreePath) {
     try {
